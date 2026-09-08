@@ -1,0 +1,3 @@
+- NEVER hardcode lunch breaks (e.g., 12:00-13:00). Always use the shift's break configuration.
+- Use Pair-wise Accumulation for time attendance (In-Out pairs).
+- If punches are odd (3, 5), return -1.0 and push to Exceptions Tab. Do NOT attempt to guess the missing punch.

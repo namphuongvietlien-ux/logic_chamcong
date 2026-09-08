@@ -1,0 +1,27 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# PyInstaller
+dist/
+build/
+AttendanceApp.onefile.spec
+
+# Local data (writable DB, photos, OCR cache, debug)
+data/
+*.db
+ocr_cache.json
+debug-*.log
+output/
+Images/
+Images_Test/
+
+# Editor
+.cursor/
+*.swp
+Thumbs.db
+~$*

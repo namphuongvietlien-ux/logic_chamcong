@@ -1,0 +1,121 @@
+PHAN MEM DOI SOAT CHAM CONG (van tay + anh timestamp)
+=====================================================
+
+YEU CAU MAY
+- Windows 10/11 64-bit
+- Python 3.11 (khi chay bang ma nguon)
+- Ket noi Internet lan dau (EasyOCR tai mo hinh ~100MB)
+
+CAU TRUC THU MUC ANH
+Images\
+  Nguyen Van A\
+    img1.jpg
+    img2.jpg
+  Tran Thi B\
+    ...
+
+Ten subfolder = ten nhan vien (khop voi Excel van tay, khong phan biet dau/hoa).
+KHONG OCR ten tieng Viet tren anh Timemark — chi OCR ngay/gio.
+Timestamp in tren anh (goc tren/duoi) se duoc OCR.
+
+Truoc khi OCR, app so sanh ten tu Excel van tay + ten folder Images voi Master Data.
+Neu thieu NV: canh bao do + hop thoai, van xu ly voi ca 8h, khong tru nghi trua.
+
+1) CAI DAT VA CHAY LOCAL
+    cd D:\chamcong
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    python app.py
+
+Mac dinh app se chon file "CONG CHECK VAN TAY THANG.xlsx" neu nam cung thu muc.
+
+Nhan vien va ngay le nam trong CSDL SQLite: thu muc data\tas.db (canh .exe hoac project).
+Lan dau: neu co Employee_Master_Data.xlsx, app tu nhap vao CSDL. Sau do sua tren the Nhan vien.
+
+Ngay le VN (Tet Duong, Tet Am 5 ngay, Gio To, 30/4, 1/5, Quoc khanh 2 ngay, nghi bu CN)
+tu sinh tren the Ngay le. Ngay le co luong + khong cham cong = 1 cong.
+
+Phep nam (BLLD): Con lai NAM NAY = Phep nam nay da ty le + Tham nien + Ton NAM TRUOC - da nghi nam nay.
+  Ton = phep chua dung cua nam truoc, mang sang nam nay. Khong dan cot "Con lai" Excel vao o Ton
+  neu so do da gom phep nam nay.
+  Chuyen Excel 1 NV: (1) Ngay chinh thuc + Phep goc (thuong 12)
+  (2) Ton nam truoc = so du nam truoc (NV moi = 0)
+  (3) App tu tinh Con lai. Neu Excel chi co 1 cot "con lai hien tai":
+      Ton nam truoc = Con lai Excel - phep nam nay da ty le - tham nien.
+  Cung nam: (Base/12)*(12-thang+1). Nam truoc: du Base. Nam sau (thu viec): 0.
+- da duyet "Phep nam". Loai "Om dau/Thai san (BHXH)", "Khong luong", "Hieu Hi" khong tru phep nam.
+The Quan ly Phep: nhap hang loat Ngay chinh thuc + Ton nam truoc; them don phep.
+The Bang dieu khien: tong cong / OT / phep thang, phep ton toan cong ty.
+CHOT CONG THANG NAY khoa ky MM/YYYY — khong chay phan tich va khong sua gio thang da chot.
+
+File mau CCONG va K9 nam trong goi phan mem (sys._MEIPASS). Khong can copy file mau
+ra ngoai. Khi chay ma nguon, app doc Template_Cham_Cong.xlsx / K9 08.2026.xlsx
+trong thu muc du an.
+
+Chay khong GUI (test / tu dong hoa):
+    python app.py --cli --excel "CÔNG CHECK VÂN TAY THÁNG.xlsx" --master Employee_Master_Data.xlsx --images Images --out output --skip-ocr
+
+2) DUNG TREN GIAO DIEN
+- Chon Employee_Master_Data.xlsx
+- Chon file Excel van tay
+- Chon thu muc Images (co the bo trong / tick "Bo qua OCR")
+- Chon thu muc xuat bao cao
+- Gio vao mac dinh chi dung khi NV chua co trong master
+- Bam "Tao thu muc nhan vien" de tao Images/<ten NV>/ tu master (chi tao folder thieu)
+- Tick "Xoa anh cu sau khi xu ly xong" neu muon xoa jpg/png trong folder NV (giu folder rong)
+- Bam "Chay phan tich" (ghi de file Excel thang do, khong append)
+- Xem tien do OCR tren thanh progress + nhat ky
+- THE "2. Sua gio":
+    Chon file K9_MM.YYYY.xlsx hoac Du_lieu_sua_gio_YYYY-MM.xlsx
+    Loc theo ngay nhung NV thieu gio vao / ra / an trua
+    Sua HH:MM hoac "Them nguoi" (neu logic tinh sai, can dua vao de sua)
+    Bam "Cap nhat tat ca bao cao" de ghi de K9, CCONG TH, Chi tiet, bao cao ngay/thang
+
+MASTER DATA (Employee_Master_Data.xlsx):
+  Employee ID | Employee Name | Department | Standard Shift Hours | Shift Start | Shift End | Lunch Duration Hours
+  Vi du: 00192 | Le Nam Phuong | Sales | 8 | 08:00 | 17:00 | 1.0
+  Lunch Duration Hours: de trong (0) neu ca khong nghi trua; chi dung khi thieu 1 dau trua.
+  Khong gan mac dinh 12:00-13:00.
+
+LOGIC CHAM CONG:
+  - Gom punch THEO NGAY LICH (khong gop 14h / khong keo punch ngay sau).
+  - Map toi da 4 moc / ngay: In1, Out1, In2, Out2.
+  - Thieu OUT (vi du In2 co, Out2 khong) -> "Thieu gio ra", cap do khong tinh gio (0).
+  - Ca dem: sua tren the Xu ly Ngoai le, tick "Tang ca qua dem (+1 ngay)", nhap gio RA.
+    Duration = (Ngay N+1 + gio RA) - (Ngay N + gio VAO). Hien thi "07:29 (+1)".
+  - Cong = Actual / Standard Shift: >=0.85 -> 1.0; >=0.45 -> 0.5; else 0.
+  - Tang ca = max(0, Actual - Standard Shift).
+
+3) FILE XUAT (ten file theo THANG CUA FILE NGUON van tay, vi du sheet THANG 07.2026
+   -> KHONG lay thang cua file mau K9 08 hay ngay OCR):
+- Bao_cao_chi_tiet_tung_ngay_YYYY-MM.xlsx
+- Bao_cao_tong_hop_thang_YYYY-MM.xlsx
+- CHAM_CONG_THANG_YYYY-MM.xlsx       (Report 2 CCONG TH + ngoai gio)
+- Chi_Tiet_Cham_Cong_MM.YYYY.xlsx    (Report 3: 1 sheet / nhan vien, o trong to do #FF9999)
+- K9_MM.YYYY.xlsx                    (bang gio APP theo ngay)
+- Du_lieu_sua_gio_YYYY-MM.xlsx       (bang goc de sua gio, lien ket moi bao cao)
+- OCR_log_YYYY-MM.xlsx (neu co anh)
+
+O trong Report 3: neu ngay co du lieu nhung thieu In1 hoac punch ra tuong ung, o trong do mau do nhat.
+
+Cong thuc Excel ghi bang dau cham phay (;) cho he thong locale Viet Nam.
+
+4) DONG GOI .EXE (may khong can cai Python)
+Cach nhanh:
+    build_exe.bat
+
+Lenh tuong duong:
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    python -c "import easyocr, pathlib; p=pathlib.Path.home()/'.EasyOCR'/'model'; p.mkdir(parents=True, exist_ok=True); easyocr.Reader(['vi', 'en'], gpu=False, model_storage_directory=str(p))"
+    pyinstaller --noconfirm --clean AttendanceApp.spec
+
+Ket qua:
+    dist\AttendanceApp\AttendanceApp.exe
+
+LUU Y:
+- Dung onedir (ca thu muc dist\AttendanceApp), KHONG dung --onefile.
+- Copy NGUYEN thu muc AttendanceApp cho nguoi dung.
+- Anh mo / khong doc duoc timestamp: dong do duoc log va skip, khong crash app.
+- Neu Excel khong dung khuon "BANG CHI TIET CHAM CONG", app thu doc bang phang cot Ten/Ngay/Vao/Ra.
