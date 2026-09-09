@@ -90,7 +90,7 @@ class LeavePanel(ctk.CTkFrame):
         header.pack(fill="x", padx=10, pady=(8, 0))
         for col, (text, width) in enumerate(
             (
-                ("Nhân viên", 260),
+                ("Mã NV / Nhân viên", 280),
                 ("Ngày chính thức", 140),
                 (leave_period_labels()["carry"], 110),
                 (leave_period_labels()["remain"], 100),
@@ -195,10 +195,13 @@ class LeavePanel(ctk.CTkFrame):
                 remain = 0
             row = ctk.CTkFrame(self.bulk, fg_color=("gray92", "gray20") if index % 2 else "transparent")
             row.pack(fill="x", pady=1)
+            code = str(item.get("employee_id") or "").strip()
+            name = str(item.get("employee_name") or "")
+            label = f"{code}  {name}".strip() if code else name
             name_btn = ctk.CTkButton(
                 row,
-                text=str(item.get("employee_name") or ""),
-                width=260,
+                text=label,
+                width=280,
                 fg_color="transparent",
                 text_color=("#1A202C", "#E2E8F0"),
                 anchor="w",

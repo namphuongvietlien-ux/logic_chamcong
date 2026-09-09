@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from processing.excel_locale import excel_formula
 from processing.leave import REMARK_PAID, REMARK_PAID_HALF, REMARK_UNPAID, REMARK_UNPAID_HALF
 from processing.sessions import format_clock_with_offset
-from processing.utils import format_date
+from processing.utils import employee_id_sort_key, format_date, name_match_key
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -397,7 +397,18 @@ def export_individual_detail(merged: pd.DataFrame, output_path: str | Path, log:
         wb.close()
         return dest
 
-    names = sorted(str(n).strip() for n in merged["employee_name"].dropna().unique() if str(n).strip())
+    people: list[tuple[object, str]] = []
+    seen: set[str] = set()
+    for rec in merged.itertuples(index=False):
+        name = str(getattr(rec, "employee_name", "") or "").strip()
+        key = name_match_key(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
+        emp_id = getattr(rec, "employee_id", "") if "employee_id" in merged.columns else ""
+        people.append((emp_id, name))
+    people.sort(key=lambda item: employee_id_sort_key(item[0], item[1]))
+    names = [item[1] for item in people]
     combo_title = _safe_sheet_name("Tổng hợp", used_names)
     default.title = combo_title
     combo = default

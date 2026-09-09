@@ -8,7 +8,17 @@ Dùng file này làm nguồn sự thật khi làm việc trên máy khác (sau `
 @hr_logic_prompts.md Hãy đọc file này để nắm lại toàn bộ logic thuật toán đã chốt, sau đó áp dụng vào codebase hiện tại (không viết lại từ đầu, không phá các rule bên dưới).
 ```
 
-Không hardcode nghỉ trưa 12:00–13:00. Giờ công = cộng từng cặp In–Out. Số lần quẹt lẻ → `-1.0` và tab Ngoại lệ; không đoán mốc thiếu.
+Không hardcode nghỉ trưa 12:00–13:00. Giờ công = cộng từng cặp In–Out. Số lần quẹt lẻ → `-1.0` và tab Ngoại lệ; không đoán mốc thiếu. Không tự thêm giờ. Ô Excel dạng văn bản `'7:00` phải đọc đúng thành 07:00.
+
+---
+
+## 0. Đọc giờ từ Excel — có cơ sở, không bịa (đã chốt)
+
+**File:** `processing/utils.py` → `parse_time_value`, `normalize_clock_text`
+
+- Chỉ lấy mốc có trong file nguồn (vân tay / OCR / ô HR sửa). Ô trống, `-`, số nguyên kiểu `529` → bỏ, **không** điền 08:00.
+- Excel hay lưu giờ kiểu văn bản có dấu nháy: `'7:00`, `'07:00`, `'7.00`. Bóc apostrophe / dấu ngoặc kép rồi parse. `7:00` không pad 0 vẫn là 07:00.
+- Nghỉ trưa: chỉ trừ khi master có `lunch_duration_hours` > 0. Không tự trừ 1 giờ khi master để trống.
 
 ---
 

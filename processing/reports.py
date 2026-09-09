@@ -20,7 +20,7 @@ from processing.period import detect_report_period, filter_to_month
 from processing.report_cham_cong import export_cham_cong_thang
 from processing.report_individual import export_individual_detail
 from processing.report_k9 import export_k9_daily
-from processing.utils import format_date, format_time
+from processing.utils import employee_id_sort_key, format_date, format_time
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -186,7 +186,17 @@ def build_monthly_summary(merged: pd.DataFrame, work_start: time) -> pd.DataFram
         return "; ".join(parts) if parts else "OK"
 
     summary["Remarks"] = summary.apply(remarks, axis=1)
-    return summary[columns].sort_values("Employee Name")
+    id_by_name: dict[str, object] = {}
+    if "employee_id" in merged.columns and "employee_name" in merged.columns:
+        for rec in merged.itertuples(index=False):
+            name = str(getattr(rec, "employee_name", "") or "").strip()
+            if name and name not in id_by_name:
+                id_by_name[name] = getattr(rec, "employee_id", "")
+    summary["_eid_key"] = [
+        employee_id_sort_key(id_by_name.get(str(name or "").strip(), ""), name)
+        for name in summary["Employee Name"].tolist()
+    ]
+    return summary.sort_values("_eid_key", kind="mergesort")[columns].reset_index(drop=True)
 
 
 def export_reports(

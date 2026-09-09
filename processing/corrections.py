@@ -29,7 +29,15 @@ from processing.sessions import (
     missing_punch_status,
 )
 from processing.period import period_from_text
-from processing.utils import format_time, name_match_key, parse_date_value, parse_time_value, clock_plus_days
+from processing.utils import (
+    clock_plus_days,
+    employee_id_sort_key,
+    format_time,
+    name_match_key,
+    parse_date_value,
+    parse_time_value,
+    sort_frame_by_employee_id,
+)
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -480,7 +488,7 @@ def rows_for_day(df: pd.DataFrame, day: date, missing_only: bool = True) -> pd.D
             flagged = annotate_day_rows(df.loc[mask & df["manual_edit"].fillna(False)])
             part = pd.concat([part, flagged]).drop_duplicates(subset=["employee_name", "date"])
             part = annotate_day_rows(part)
-    return part.sort_values("employee_name")
+    return sort_frame_by_employee_id(part)
 
 
 def rows_for_employee(df: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -554,26 +562,32 @@ def upsert_clocks(
 def roster_names(df: pd.DataFrame, master: pd.DataFrame | None = None) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
+    id_by_key: dict[str, str] = {}
+
+    def add(name: object, emp_id: object = "") -> None:
+        text = str(name or "").strip()
+        key = name_match_key(text)
+        if not text or not key:
+            return
+        code = str(emp_id or "").strip()
+        if code and key not in id_by_key:
+            id_by_key[key] = code
+        if key not in seen:
+            seen.add(key)
+            names.append(text)
+
     if df is not None and not df.empty and "employee_name" in df.columns:
-        for raw in df["employee_name"].tolist():
-            name = str(raw or "").strip()
-            key = name_match_key(name)
-            if name and key not in seen:
-                seen.add(key)
-                names.append(name)
+        has_id = "employee_id" in df.columns
+        for rec in df.itertuples(index=False):
+            add(getattr(rec, "employee_name", ""), getattr(rec, "employee_id", "") if has_id else "")
     extra = list(df.attrs.get("roster") or []) if df is not None else []
     for name in extra:
-        key = name_match_key(name)
-        if name and key not in seen:
-            seen.add(key)
-            names.append(str(name).strip())
+        add(name)
     if master is not None and not master.empty and "employee_name" in master.columns:
-        for raw in master["employee_name"].tolist():
-            name = str(raw or "").strip()
-            key = name_match_key(name)
-            if name and key not in seen:
-                seen.add(key)
-                names.append(name)
+        has_id = "employee_id" in master.columns
+        for rec in master.itertuples(index=False):
+            add(getattr(rec, "employee_name", ""), getattr(rec, "employee_id", "") if has_id else "")
+    names.sort(key=lambda n: employee_id_sort_key(id_by_key.get(name_match_key(n), ""), n))
     return names
 
 
@@ -658,7 +672,12 @@ def collect_missing_punches(df: pd.DataFrame) -> list[dict]:
                 "status": status,
             }
         )
-    out.sort(key=lambda item: (str(item.get("employee_name") or ""), item.get("date") or date.min))
+    out.sort(
+        key=lambda item: (
+            employee_id_sort_key(item.get("employee_id"), item.get("employee_name")),
+            item.get("date") or date.min,
+        )
+    )
     return out
 
 

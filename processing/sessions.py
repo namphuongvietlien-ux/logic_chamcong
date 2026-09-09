@@ -284,12 +284,12 @@ def hours_from_datetimes(
     lunch_duration_hours: Optional[float] = None,
     lunch_start: time = DAYTIME_LUNCH_START,
     lunch_end: time = DAYTIME_LUNCH_END,
-    unset_lunch_hours: float = 1.0,
+    unset_lunch_hours: float = 0.0,
 ) -> tuple[float, float]:
     """Net hours from In/Out pairs. Odd punch count → 0 hours (exception tab).
 
-    unset_lunch_hours: used when master lunch is 0/blank (default 1h). Pass 0 for
-    employees missing from master so they never get an invented lunch break.
+    Lunch is deducted only when master provides ``lunch_duration_hours`` (or the
+    caller passes unset_lunch_hours). Never invent 1h / 12:00–13:00.
     """
     del lunch_start, lunch_end
     stamps = merge_day_punches(stamps)

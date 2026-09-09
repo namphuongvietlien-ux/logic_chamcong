@@ -11,6 +11,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from processing.database import connect, init_db, previous_month_key
 from processing.excel_locale import excel_formula  # SUM(range) is one arg; IF uses ';' below
+from processing.utils import employee_id_sort_key
 
 NOTE_NEW = "Nhân sự mới / Đi làm lại"
 NOTE_GONE = "Nghỉ việc / Không phát sinh công"
@@ -84,7 +85,12 @@ def mom_variance(target_month: str, previous_month: Optional[str] = None) -> pd.
     out = merged[
         ["employee_id", "employee_name", "name_key", "cong_prev", "cong_now", "variance", "note", "target_month", "previous_month"]
     ].copy()
-    return out.sort_values(["variance", "employee_name"], ascending=[True, True]).reset_index(drop=True)
+    out["_eid_key"] = [
+        employee_id_sort_key(rec.employee_id, rec.employee_name) for rec in out.itertuples(index=False)
+    ]
+    return out.sort_values(["variance", "_eid_key"], ascending=[True, True], kind="mergesort").drop(
+        columns="_eid_key"
+    ).reset_index(drop=True)
 
 
 def export_mom_excel(rows: pd.DataFrame, dest: str | Path, target_month: str, previous_month: str) -> Path:

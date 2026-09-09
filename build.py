@@ -193,7 +193,7 @@ def main() -> int:
         print(f"CustomTkinter assets: {_ctk_dir()}")
         print("Building onefile windowed exe (dist\\AttendanceApp.exe).")
         print("First launch unpacks to a temp folder and can take a minute (EasyOCR/torch).")
-        print("Database is created next to the exe in data\\tas.db — not inside _MEIPASS.")
+        print("Database is created next to the exe (hr_system.db) — not inside _MEIPASS.")
     if not spec.exists():
         print(f"Missing spec: {spec}", file=sys.stderr)
         return 1

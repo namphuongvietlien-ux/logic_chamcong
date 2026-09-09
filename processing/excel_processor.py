@@ -53,7 +53,7 @@ def _looks_like_detail_header(value) -> bool:
 
 
 def _classify_punches(times: list[time]) -> tuple[Optional[time], Optional[time]]:
-    """Earliest punch = in, latest punch = out. Single punch uses noon heuristic."""
+    """Earliest punch = in, latest punch = out. Never invent a missing clock."""
     if not times:
         return None, None
     unique = sorted(set(times))

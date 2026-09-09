@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
@@ -10,6 +10,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from processing.database import (
+    backup_database,
     employee_month_stats,
     get_setting,
     is_month_locked,
@@ -74,6 +75,7 @@ class DashboardPanel(ctk.CTkFrame):
         )
         self.month_combo.pack(side="left", padx=8)
         ctk.CTkButton(bar, text="Xem kỳ này", width=110, command=self.refresh).pack(side="left")
+        ctk.CTkButton(bar, text="Sao lưu CSDL", width=130, command=self._backup_database).pack(side="left", padx=8)
         ctk.CTkLabel(bar, textvariable=self.lock_var, text_color=("#C53030", "#FC8181")).pack(side="right")
 
         self.inner = ctk.CTkTabview(self)
@@ -331,6 +333,27 @@ class DashboardPanel(ctk.CTkFrame):
                 tags=stripe_tags(visible, extra),
             )
             visible += 1
+
+    def _backup_database(self) -> None:
+        from processing.resources import database_path
+
+        src = database_path()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = filedialog.asksaveasfilename(
+            title="Sao lưu CSDL",
+            defaultextension=".db",
+            initialfile=f"{src.stem}_{stamp}.db",
+            filetypes=[("SQLite", "*.db"), ("Tất cả", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            saved = backup_database(dest)
+        except Exception as exc:
+            messagebox.showerror(self.app.title(), f"Không sao lưu được CSDL:\n{exc}")
+            return
+        self.app._append_log(f"Đã sao lưu CSDL → {saved}")
+        messagebox.showinfo(self.app.title(), f"Đã sao lưu CSDL:\n{saved}")
 
     def _export_mom(self) -> None:
         key = self.month_var.get().strip()

@@ -18,12 +18,20 @@ hiddenimports = [
     "scipy",
     "nltk",
     "multiprocessing",
+    "torchvision",
+    "torchvision.ops",
+    "torchvision.ops.boxes",
+    "torchvision.ops.nms",
+    "torchvision.extension",
+    "torchvision._meta_registrations",
     "correction_ui",
     "employee_ui",
     "holiday_ui",
     "leave_ui",
     "dashboard_ui",
     "history_ui",
+    "auto_updater",
+    "requests",
     "date_picker",
     "tkcalendar",
     "babel",
@@ -81,11 +89,14 @@ try:
 except Exception:
     pass
 
-easyocr_home = Path.home() / ".EasyOCR"
-if easyocr_home.exists():
-    datas.append((str(easyocr_home), ".EasyOCR"))
-
 _spec_dir = Path(SPECPATH) if "SPECPATH" in dir() else Path(".")
+_runtime_hook = _spec_dir / "packaging" / "pyi_rth_torchvision_ops.py"
+_models_dir = _spec_dir / "models"
+if not _models_dir.is_dir() or not any(_models_dir.glob("*.pth")):
+    raise SystemExit("Missing EasyOCR models in models/. Run: py download_ocr_models.py")
+datas.append((str(_models_dir.resolve()), "models"))
+# Never pack SQLite into datas — HR data lives next to the .exe (hr_system.db / data/tas.db),
+# not inside _MEIPASS. Bundling a .db would overwrite live records on each deploy.
 # Required layouts: packed into _MEIPASS so end users never copy them.
 _required_templates = (
     "Template_Cham_Cong.xlsx",
@@ -112,7 +123,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(_runtime_hook)] if _runtime_hook.is_file() else [],
     excludes=["pytest", "unittest"],
     noarchive=False,
     optimize=0,

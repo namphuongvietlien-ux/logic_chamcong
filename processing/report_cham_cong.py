@@ -25,7 +25,7 @@ from processing.cong_rules import (
     weekday_label,
 )
 from processing.resources import bundled_file, resource_path
-from processing.utils import name_match_key
+from processing.utils import employee_id_sort_key, name_match_key
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -201,29 +201,49 @@ def _names_from_merged(merged) -> list[str]:
     return names
 
 
+def _ids_from_merged(merged) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if merged is None or getattr(merged, "empty", True):
+        return out
+    if "employee_name" not in merged.columns or "employee_id" not in merged.columns:
+        return out
+    for rec in merged.itertuples(index=False):
+        name = str(getattr(rec, "employee_name", "") or "").strip()
+        key = name_match_key(name)
+        if not key or key in out:
+            continue
+        out[key] = getattr(rec, "employee_id", "")
+    return out
+
+
 def _catalog_employees(ws_th: Worksheet, ws_ot: Worksheet, merged) -> list[dict[str, Any]]:
-    """Union of CCONG TH + CCONG NGOAI GIO + dữ liệu chấm công, giữ thứ tự mẫu."""
+    """Union of CCONG TH + CCONG NGOAI GIO + dữ liệu chấm công, xếp theo mã NV."""
     catalog: dict[str, dict[str, Any]] = {}
     order: list[str] = []
+    ids = _ids_from_merged(merged)
 
     def add(name: str, mnv: Any = None) -> None:
         key = name_match_key(name)
         if not key:
             return
         if key not in catalog:
-            catalog[key] = {"name": name.strip(), "mnv": mnv, "key": key}
+            catalog[key] = {"name": name.strip(), "mnv": mnv if mnv not in (None, "") else ids.get(key), "key": key}
             order.append(key)
             return
         if catalog[key]["mnv"] in (None, "") and mnv not in (None, ""):
             catalog[key]["mnv"] = mnv
+        elif catalog[key]["mnv"] in (None, "") and ids.get(key) not in (None, ""):
+            catalog[key]["mnv"] = ids.get(key)
 
     for person in _people_on_sheet(ws_th, name_col=5, start_row=8, mnv_col=4):
         add(person["name"], person["mnv"])
     for person in _people_on_sheet(ws_ot, name_col=3, start_row=8, mnv_col=2):
         add(person["name"], person["mnv"])
     for name in _names_from_merged(merged):
-        add(name)
-    return [catalog[k] for k in order]
+        add(name, ids.get(name_match_key(name)))
+    people = [catalog[k] for k in order]
+    people.sort(key=lambda person: employee_id_sort_key(person.get("mnv"), person.get("name")))
+    return people
 
 
 def _retarget_formula(formula: Any, src_row: int, dest_row: int) -> Any:

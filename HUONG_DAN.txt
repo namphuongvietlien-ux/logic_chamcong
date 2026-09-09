@@ -30,7 +30,10 @@ Neu thieu NV: canh bao do + hop thoai, van xu ly voi ca 8h, khong tru nghi trua.
 
 Mac dinh app se chon file "CONG CHECK VAN TAY THANG.xlsx" neu nam cung thu muc.
 
-Nhan vien va ngay le nam trong CSDL SQLite: thu muc data\tas.db (canh .exe hoac project).
+Nhan vien va ngay le nam trong CSDL SQLite canh file .exe:
+  hr_system.db (ban moi) hoac data\tas.db (ban cu).
+KHONG luu CSDL trong _MEIPASS / _internal. Khi cap nhat exe, giu nguyen file .db.
+Sao luu bang nut "Sao luu CSDL" truoc khi doi ban moi.
 Lan dau: neu co Employee_Master_Data.xlsx, app tu nhap vao CSDL. Sau do sua tren the Nhan vien.
 
 Ngay le VN (Tet Duong, Tet Am 5 ngay, Gio To, 30/4, 1/5, Quoc khanh 2 ngay, nghi bu CN)

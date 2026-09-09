@@ -249,7 +249,7 @@ def first_in_time(
 
 def _lunch_deduct_hours(
     lunch_duration_hours: Optional[float],
-    unset_lunch_hours: float = MISSING_LUNCH_PUNCH_HOURS,
+    unset_lunch_hours: float = 0.0,
 ) -> float:
     amount = _as_hours(lunch_duration_hours)
     if amount <= 0:
@@ -264,7 +264,7 @@ def hours_from_clocks(
     out2: Optional[time],
     lunch_duration_hours: Optional[float] = None,
     logical_date: Optional[date] = None,
-    unset_lunch_hours: float = 1.0,
+    unset_lunch_hours: float = 0.0,
     overnight: bool = False,
 ) -> tuple[float, float]:
     """Net hours from clocks on one calendar day.

@@ -22,7 +22,7 @@ from processing.cong_rules import (
     overtime_hours,
 )
 from processing.resources import resource_path
-from processing.utils import name_match_key
+from processing.utils import employee_id_sort_key, name_match_key
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -74,16 +74,24 @@ def _append_missing_k9(ws: Worksheet, merged) -> list[str]:
 
     wanted: list[str] = []
     seen = set(existing_keys)
+    id_by_key: dict[str, object] = {}
     if merged is not None and not getattr(merged, "empty", True) and "employee_name" in merged.columns:
-        for raw in merged["employee_name"].tolist():
+        has_id = "employee_id" in merged.columns
+        for rec in merged.itertuples(index=False):
+            raw = getattr(rec, "employee_name", None)
             if raw is None or not str(raw).strip():
                 continue
             name = str(raw).strip()
             key = name_match_key(name)
-            if not key or key in seen:
+            if not key:
+                continue
+            if has_id and key not in id_by_key:
+                id_by_key[key] = getattr(rec, "employee_id", "")
+            if key in seen:
                 continue
             seen.add(key)
             wanted.append(name)
+    wanted.sort(key=lambda name: employee_id_sort_key(id_by_key.get(name_match_key(name), ""), name))
     if not wanted:
         return []
 

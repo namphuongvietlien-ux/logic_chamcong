@@ -15,6 +15,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 from processing.database import (
+    backup_database,
     employees_frame,
     import_employees_from_excel,
     init_db,
@@ -30,6 +31,7 @@ from dashboard_ui import DashboardPanel
 from employee_ui import EmployeePanel
 from holiday_ui import HolidayPanel
 from leave_ui import LeavePanel
+from auto_updater import CURRENT_VERSION, prompt_update_check, schedule_update_check
 
 APP_TITLE = "Đối soát chấm công"
 
@@ -84,6 +86,7 @@ class AttendanceApp(ctk.CTk):
         self._bootstrap_store()
         self._build_ui()
         self.after(120, self._poll_log)
+        schedule_update_check(self)
 
     def _bootstrap_store(self) -> None:
         init_db()
@@ -103,12 +106,25 @@ class AttendanceApp(ctk.CTk):
             text="Đối soát chấm công vân tay + ảnh",
             font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"),
         ).pack(anchor="w")
+        sub = ctk.CTkFrame(header, fg_color="transparent")
+        sub.pack(fill="x", pady=(4, 0))
         ctk.CTkLabel(
-            header,
+            sub,
             text="Phân tích  ·  Ngoại lệ  ·  Nhân viên  ·  Phép  ·  Ngày lễ  ·  Chốt công",
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color=("#4A5568", "#A0AEC0"),
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(side="left")
+        ctk.CTkButton(
+            sub,
+            text="Cập nhật",
+            width=100,
+            command=lambda: prompt_update_check(self),
+        ).pack(side="right")
+        ctk.CTkLabel(
+            sub,
+            text=f"v{CURRENT_VERSION}",
+            text_color=("#4A5568", "#A0AEC0"),
+        ).pack(side="right", padx=10)
 
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill="both", expand=True, padx=18, pady=(4, 16))
@@ -123,11 +139,20 @@ class AttendanceApp(ctk.CTk):
         card = ctk.CTkFrame(tab1, corner_radius=16)
         card.pack(fill="x", padx=8, pady=8)
 
+        db_row = ctk.CTkFrame(card, fg_color="transparent")
+        db_row.grid(row=0, column=0, columnspan=3, sticky="ew", padx=14, pady=(12, 4))
         ctk.CTkLabel(
-            card,
-            text=f"CSDL nội bộ: {database_path()}  ·  Nhân viên & ngày lễ quản lý trên các thẻ riêng.",
+            db_row,
+            text=f"CSDL nội bộ (giữ file này khi cập nhật exe): {database_path()}",
             text_color=("#4A5568", "#A0AEC0"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(12, 4))
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            db_row,
+            text="Sao lưu CSDL",
+            width=130,
+            command=self._backup_database,
+        ).pack(side="right", padx=(8, 0))
         self._path_row(card, 1, "File Excel vân tay", self.excel_var, self._pick_excel)
         self._path_row(card, 2, "Thư mục ảnh (Images)", self.images_var, self._pick_images)
         self._path_row(card, 3, "Thư mục xuất báo cáo", self.output_var, self._pick_output)
@@ -264,6 +289,25 @@ class AttendanceApp(ctk.CTk):
         path = filedialog.askdirectory(title="Chọn thư mục xuất báo cáo")
         if path:
             self.output_var.set(path)
+
+    def _backup_database(self) -> None:
+        src = database_path()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = filedialog.asksaveasfilename(
+            title="Sao lưu CSDL",
+            defaultextension=".db",
+            initialfile=f"{src.stem}_{stamp}.db",
+            filetypes=[("SQLite", "*.db"), ("Tất cả", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            saved = backup_database(dest)
+        except Exception as exc:
+            messagebox.showerror(self.title(), f"Không sao lưu được CSDL:\n{exc}")
+            return
+        self._append_log(f"Đã sao lưu CSDL → {saved}")
+        messagebox.showinfo(self.title(), f"Đã sao lưu CSDL:\n{saved}")
 
     def _append_log(self, message: str, alert: bool = False) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")

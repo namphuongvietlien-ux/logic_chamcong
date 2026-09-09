@@ -25,7 +25,7 @@ from processing.database import (
 from processing.excel_locale import excel_formula
 from processing.leave import LEAVE_TYPE_PAID, create_leave_request, invalidate_leave_cache
 from processing.period import period_from_text
-from processing.utils import name_match_key
+from processing.utils import employee_id_sort_key, name_match_key
 
 SHEET_NAME = "Tổng hợp"
 HISTORY_NOTE_PREFIX = "Nạp lịch sử "
@@ -301,6 +301,7 @@ def match_history_rows(rows: list[dict]) -> list[dict]:
             matched["name_key"] = name_match_key(name)
             matched["match_note"] = "Không có trong CSDL"
         out.append(matched)
+    out.sort(key=lambda item: employee_id_sort_key(item.get("employee_id"), item.get("employee_name")))
     return out
 
 

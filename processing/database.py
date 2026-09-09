@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, time
@@ -10,8 +11,8 @@ from typing import Any, Callable, Iterator, Optional
 
 import pandas as pd
 
-from processing.resources import database_path
-from processing.utils import name_match_key, parse_time_value
+from processing.resources import get_db_path, is_ephemeral_bundle_path, writable_dir
+from processing.utils import employee_id_sort_key, name_match_key, parse_time_value
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -115,26 +116,50 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in rows}
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, name: str, decl: str) -> bool:
+    """ALTER TABLE add-column only. Never DROP. Duplicate column → ignore."""
+    if name in _table_columns(conn, table):
+        return False
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def upgrade_database(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS + additive ALTER TABLE. Never DROP or replace the file."""
+    if "DROP TABLE" in SCHEMA.upper():
+        raise RuntimeError("SCHEMA must never DROP TABLE on startup.")
+    conn.executescript(SCHEMA)
+    added_official = _add_column_if_missing(
+        conn, "employees", "official_start_date", "TEXT NOT NULL DEFAULT ''"
+    )
+    for name, decl in EMPLOYEE_MIGRATIONS:
+        if name == "official_start_date":
+            continue
+        _add_column_if_missing(conn, "employees", name, decl)
+    if added_official or (
+        "official_start_date" in _table_columns(conn, "employees")
+        and "join_date" in _table_columns(conn, "employees")
+    ):
+        try:
+            conn.execute(
+                """
+                UPDATE employees
+                SET official_start_date = join_date
+                WHERE official_start_date = '' AND join_date != ''
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
+    for name, decl in LEAVE_MIGRATIONS:
+        _add_column_if_missing(conn, "leave_requests", name, decl)
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     """Add new columns/tables on existing databases without dropping data."""
-    conn.executescript(SCHEMA)
-    columns = _table_columns(conn, "employees")
-    added_official = "official_start_date" not in columns
-    for name, decl in EMPLOYEE_MIGRATIONS:
-        if name not in columns:
-            conn.execute(f"ALTER TABLE employees ADD COLUMN {name} {decl}")
-    if added_official:
-        conn.execute(
-            """
-            UPDATE employees
-            SET official_start_date = join_date
-            WHERE official_start_date = '' AND join_date != ''
-            """
-        )
-    leave_cols = _table_columns(conn, "leave_requests")
-    for name, decl in LEAVE_MIGRATIONS:
-        if name not in leave_cols:
-            conn.execute(f"ALTER TABLE leave_requests ADD COLUMN {name} {decl}")
+    upgrade_database(conn)
 
 
 def _now() -> str:
@@ -205,7 +230,13 @@ def previous_month_key(month_year: str) -> str:
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    path = database_path()
+    path = get_db_path()
+    if is_ephemeral_bundle_path(path):
+        raise RuntimeError(
+            "CSDL không được lưu trong thư mục tạm PyInstaller (_MEIPASS). "
+            "Đặt file .db cạnh AttendanceApp.exe."
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     try:
@@ -217,10 +248,30 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> Path:
-    path = database_path()
+    path = get_db_path()
+    if is_ephemeral_bundle_path(path):
+        raise RuntimeError("Refusing to create SQLite database inside PyInstaller temp (_MEIPASS).")
+    path.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
-        migrate(conn)
+        upgrade_database(conn)
     return path
+
+
+def backup_database(dest: str | Path | None = None) -> Path:
+    """Copy the live DB next to the exe. Does not replace or delete the original."""
+    src = get_db_path()
+    if not src.is_file() or src.stat().st_size <= 0:
+        raise FileNotFoundError("Chưa có CSDL để sao lưu.")
+    if dest is None:
+        folder = writable_dir() / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest_path = folder / f"{src.stem}_{stamp}{src.suffix or '.db'}"
+    else:
+        dest_path = Path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest_path)
+    return dest_path
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -244,9 +295,10 @@ def list_employees(active_only: bool = False) -> list[dict]:
     sql = "SELECT * FROM employees"
     if active_only:
         sql += " WHERE active = 1"
-    sql += " ORDER BY employee_name COLLATE NOCASE"
     with connect() as conn:
-        return [dict(row) for row in conn.execute(sql)]
+        rows = [dict(row) for row in conn.execute(sql)]
+    rows.sort(key=lambda item: employee_id_sort_key(item.get("employee_id"), item.get("employee_name")))
+    return rows
 
 
 def employees_frame(active_only: bool = True) -> pd.DataFrame:

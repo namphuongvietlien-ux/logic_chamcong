@@ -33,7 +33,7 @@ from processing.sessions import (
     session_clock_fields,
     unique_sorted,
 )
-from processing.utils import name_match_key
+from processing.utils import name_match_key, sort_frame_by_employee_id
 
 LogFn = Optional[Callable[[str], None]]
 
@@ -223,13 +223,13 @@ def recompute_record(
         lunch_h = 0.0
         data["lunch_duration_hours"] = 0.0
         data["standard_shift_hours"] = std
-    unset_lunch = 0.0 if not matched else 1.0
+    # Chỉ trừ nghỉ khi master có số giờ. Không tự thêm 1h.
     hour_stamps = [s for s in (data.get("punch_datetimes") or ()) if s]
     if hour_stamps:
         actual, deducted = hours_from_datetimes(
             hour_stamps,
             0.0 if overnight_flag else lunch_h,
-            unset_lunch_hours=0.0 if overnight_flag else unset_lunch,
+            unset_lunch_hours=0.0,
         )
     else:
         actual, deducted = hours_from_clocks(
@@ -239,7 +239,7 @@ def recompute_record(
             out2,
             lunch_h,
             logical_date=logical,
-            unset_lunch_hours=unset_lunch,
+            unset_lunch_hours=0.0,
             overnight=bool(overnight_flag),
         )
     data["deducted_lunch_hours"] = round(deducted, 2)
@@ -444,7 +444,7 @@ def merge_attendance(
     roster = master if master is not None else pd.DataFrame()
     merged = _ensure_holiday_rows(merged, roster, log)
     merged = _ensure_leave_rows(merged, roster, log)
-    merged = merged.sort_values(["employee_name", "date"]).reset_index(drop=True)
+    merged = sort_frame_by_employee_id(merged, extra_columns=("date",))
     if log:
         log(f"Đã gộp {len(merged)} dòng theo nhân viên + ngày lịch.")
     return merged

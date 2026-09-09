@@ -2,30 +2,32 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\python.exe" (
-  echo Creating virtualenv...
-  python -m venv .venv
+REM Do not use .venv here: it may point at a Python install that no longer exists.
+REM Do not use --onefile. OCR/torch needs the whole dist\AttendanceApp folder.
+
+if not exist "models\craft_mlt_25k.pth" (
+  echo Missing EasyOCR models. Downloading into models\ ...
+  py download_ocr_models.py
+  if errorlevel 1 (
+    echo Failed to download OCR models.
+    pause
+    exit /b 1
+  )
 )
 
-call ".venv\Scripts\activate.bat"
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-
-echo.
-echo First-time EasyOCR model download (if needed)...
-python -c "import easyocr, pathlib; p=pathlib.Path.home()/'.EasyOCR'/'model'; p.mkdir(parents=True, exist_ok=True); easyocr.Reader(['en'], gpu=False, verbose=True, model_storage_directory=str(p))"
-
-echo.
 echo Building onedir exe (dist\AttendanceApp\AttendanceApp.exe)...
 if /I "%~1"=="full" (
   echo Full rebuild with --clean
-  pyinstaller --noconfirm --clean AttendanceApp.spec
+  py -m PyInstaller --noconfirm --clean AttendanceApp.spec
 ) else (
-  echo Incremental rebuild (reuse Analysis cache; pass "full" to clean)
-  pyinstaller --noconfirm AttendanceApp.spec
+  echo Incremental rebuild
+  py -m PyInstaller --noconfirm AttendanceApp.spec
 )
 
+if exist "README_CHAY.txt" copy /Y "README_CHAY.txt" "dist\AttendanceApp\README_CHAY.txt" >nul
+if exist "HUONG_DAN.txt" copy /Y "HUONG_DAN.txt" "dist\AttendanceApp\HUONG_DAN.txt" >nul
+
 echo.
-echo Done. Distribute the entire folder dist\AttendanceApp\
+echo Done. Zip and send the entire folder dist\AttendanceApp\
 echo Run: dist\AttendanceApp\AttendanceApp.exe
 pause

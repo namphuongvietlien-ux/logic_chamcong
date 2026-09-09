@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from processing.resources import resource_path
 from processing.utils import parse_time_value
 
 LogFn = Optional[Callable[[str], None]]
@@ -62,18 +63,40 @@ def _log(callback: LogFn, message: str) -> None:
         callback(message)
 
 
+REQUIRED_OCR_MODELS = ("craft_mlt_25k.pth", "latin_g2.pth")
+
+
 def _model_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-        bundled = base / ".EasyOCR" / "model"
-        if bundled.exists():
-            return bundled
-        return Path(sys.executable).parent / "easyocr_models"
-    return Path.home() / ".EasyOCR" / "model"
+    """Bundled EasyOCR weights: project/models, or _MEIPASS/models inside the exe."""
+    return Path(resource_path("models"))
+
+
+def _models_ready(model_dir: Path) -> bool:
+    return all((model_dir / name).is_file() for name in REQUIRED_OCR_MODELS)
+
+
+def _ensure_torchvision_ops() -> None:
+    """Register torchvision::nms — missing in frozen worker processes unless imported first."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = str(sys._MEIPASS)
+        os.environ["PATH"] = meipass + os.pathsep + os.environ.get("PATH", "")
+    try:
+        import torchvision  # noqa: F401
+        import torchvision.ops  # noqa: F401
+        from torchvision.ops import nms  # noqa: F401
+    except Exception:
+        pass
+
+
+def _frozen_onefile() -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    return not (Path(sys.executable).resolve().parent / "_internal").is_dir()
 
 
 def _patch_torch_cpu() -> None:
     """EasyOCR on CPU: skip pin_memory, mute quantize warnings, cap threads so the GUI stays responsive."""
+    _ensure_torchvision_ops()
     os.environ.setdefault("OMP_NUM_THREADS", "2")
     os.environ.setdefault("MKL_NUM_THREADS", "2")
     warnings.filterwarnings("ignore", message=".*pin_memory.*")
@@ -167,6 +190,7 @@ def _ensure_process_reader():
     if _PROCESS_READER is None:
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["MKL_NUM_THREADS"] = "1"
+        _ensure_torchvision_ops()
         try:
             import torch
 
@@ -210,20 +234,29 @@ def ocr_image_job(item: tuple[str, str, str]) -> dict[str, Any]:
 
 
 def _init_reader(log: LogFn = None):
-    _log(log, "Đang tải mô hình OCR (lần đầu có thể tải file ~100MB)...")
     _patch_torch_cpu()
+    model_storage = _model_dir()
+    offline = _models_ready(model_storage)
+    if offline:
+        _log(log, f"Nạp mô hình OCR offline từ {model_storage}")
+    elif getattr(sys, "frozen", False):
+        raise FileNotFoundError(
+            "Thiếu mô hình EasyOCR (craft_mlt_25k.pth, latin_g2.pth). "
+            "Đặt chúng vào thư mục models rồi đóng gói lại bằng AttendanceApp.spec."
+        )
+    else:
+        _log(log, f"Tải mô hình OCR vào {model_storage} (chỉ lần đầu, cần mạng)...")
+        model_storage.mkdir(parents=True, exist_ok=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         import easyocr
 
-        model_storage = str(_model_dir())
-        Path(model_storage).mkdir(parents=True, exist_ok=True)
         reader = easyocr.Reader(
             ["vi", "en"],
             gpu=False,
             verbose=False,
-            model_storage_directory=model_storage,
-            download_enabled=True,
+            model_storage_directory=str(model_storage),
+            download_enabled=not offline,
         )
     _log(log, "Mô hình OCR sẵn sàng.")
     return reader
@@ -772,7 +805,7 @@ def _ocr_uncached_parallel(
     workers = min(_ocr_worker_count(), len(jobs))
     _log(log, f"OCR song song {len(jobs)} ảnh, {workers} process (giữ 1 nhân cho giao diện).")
     processed = 0
-    with ProcessPoolExecutor(max_workers=workers) as pool:
+    with ProcessPoolExecutor(max_workers=workers, initializer=_ensure_torchvision_ops) as pool:
         futures = {pool.submit(ocr_image_job, job): job for job in jobs}
         for fut in as_completed(futures):
             job = futures[fut]
@@ -796,7 +829,11 @@ def _ocr_uncached_parallel(
                     if result.get("date") and result.get("time")
                     else None
                 )
-            cache[key] = _cache_payload(dt)
+            payload = _cache_payload(dt)
+            if payload is not None:
+                cache[key] = payload
+            else:
+                cache.pop(key, None)
             _apply_ocr_result(
                 result.get("employee") or employee,
                 Path(result.get("path") or path_str),
@@ -833,7 +870,11 @@ def _ocr_uncached_sequential(
     for employee, path_str, key in jobs:
         path = Path(path_str)
         dt, raw_text, note = _ocr_image(reader, path, log=log)
-        cache[key] = _cache_payload(dt)
+        payload = _cache_payload(dt)
+        if payload is not None:
+            cache[key] = payload
+        else:
+            cache.pop(key, None)
         _apply_ocr_result(employee, path, dt, raw_text, note, punches, ocr_rows, log)
         processed += 1
         done += 1
@@ -873,8 +914,9 @@ def load_photo_attendance(
     fresh_jobs: list[tuple[str, str, str]] = []
     for employee, path in files:
         key = _cache_key(root, path)
-        if key in cache:
-            cached_jobs.append((employee, path, key, cache[key]))
+        entry = cache.get(key)
+        if entry is not None:
+            cached_jobs.append((employee, path, key, entry))
         else:
             fresh_jobs.append((employee, str(path), key))
 
@@ -895,7 +937,9 @@ def load_photo_attendance(
 
     if fresh_jobs:
         try:
-            if len(fresh_jobs) == 1:
+            if len(fresh_jobs) == 1 or _frozen_onefile():
+                if _frozen_onefile() and len(fresh_jobs) > 1:
+                    _log(log, "OCR tuần tự trong bản .exe onefile (tránh lỗi torchvision::nms).")
                 done = _ocr_uncached_sequential(
                     fresh_jobs, cache, cache_path, punches, ocr_rows, done, total, log, progress
                 )
