@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import threading
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, time
@@ -26,7 +27,7 @@ from processing.utils import parse_time_value
 LogFn = Optional[Callable[[str], None]]
 ProgressFn = Optional[Callable[[int, int, str], None]]
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff", ".jfif"}
 
 DATETIME_PATTERNS = [
     re.compile(
@@ -92,6 +93,17 @@ def _frozen_onefile() -> bool:
     if not getattr(sys, "frozen", False):
         return False
     return not (Path(sys.executable).resolve().parent / "_internal").is_dir()
+
+
+def _use_process_pool(job_count: int) -> bool:
+    """ProcessPool from a Tk background thread (or a frozen exe) fails on Windows."""
+    if job_count <= 1:
+        return False
+    if getattr(sys, "frozen", False):
+        return False
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    return True
 
 
 def _patch_torch_cpu() -> None:
@@ -263,18 +275,16 @@ def _init_reader(log: LogFn = None):
 
 
 def _load_cv_image(path: Path):
+    """Load BGR image. Never use cv2.imread on Windows — it fails on Unicode paths."""
     import cv2
 
+    image = None
     try:
-        image = cv2.imread(str(path))
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data.size:
+            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
     except Exception:
         image = None
-    if image is None:
-        try:
-            data = np.fromfile(str(path), dtype=np.uint8)
-            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        except Exception:
-            image = None
     if image is None:
         try:
             with Image.open(path) as pil:
@@ -282,7 +292,9 @@ def _load_cv_image(path: Path):
                 image = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
         except (OSError, UnidentifiedImageError, ValueError):
             return None
-    return image
+    if image is None:
+        return None
+    return np.ascontiguousarray(image)
 
 
 def preprocess_image(img_path: str | Path):
@@ -358,7 +370,14 @@ def _overlay_rois(bgr) -> list:
 
 
 def _readtext(reader, source) -> list[str]:
-    result = reader.readtext(source, detail=0, paragraph=True)
+    import cv2
+
+    if source is None or getattr(source, "size", 0) == 0:
+        return []
+    image = np.ascontiguousarray(source)
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    result = reader.readtext(image, detail=0, paragraph=True)
     return [str(t) for t in result if t]
 
 
@@ -711,36 +730,16 @@ def _ocr_image(reader, path: Path, log: LogFn = None) -> tuple[Optional[datetime
         return exif_dt, blob, "Used EXIF fallback"
     return None, blob, note_parse or "Không đọc được timestamp"
 
-    if parsed_date is None or parsed_time is None:
-        _warn_missing_ocr_parts(blob, parsed_date, parsed_time, log=log, source=path.name)
-    dt = combine_date_time(parsed_date, parsed_time)
-    if dt:
-        return dt, blob, note_parse or ("OpenCV preprocess" if pass2_ok else "")
-    exif_dt = _exif_datetime(path)
-    if parsed_time and exif_dt:
-        combined = datetime(
-            exif_dt.year, exif_dt.month, exif_dt.day,
-            parsed_time.hour, parsed_time.minute, parsed_time.second,
-        )
-        return combined, blob, "Date from EXIF, time from OCR"
-    if parsed_date and not parsed_time:
-        return None, blob, f"OCR có ngày {parsed_date.isoformat()}, không thấy giờ"
-    if parsed_time and not parsed_date:
-        if exif_dt:
-            return datetime(
-                exif_dt.year, exif_dt.month, exif_dt.day,
-                parsed_time.hour, parsed_time.minute, parsed_time.second,
-            ), blob, "Date from EXIF"
-        return None, blob, f"OCR có giờ {parsed_time.strftime('%H:%M')}, không thấy ngày"
-    if exif_dt:
-        return exif_dt, blob, "Used EXIF fallback"
-    return None, blob, note_parse or "Không đọc được timestamp"
+
+def _is_image_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
 
 
 def _iter_employee_images(images_root: Path) -> list[tuple[str, Path]]:
     """Map each photo to its parent subfolder name — that is the employee name.
 
     Vietnamese names on Timemark overlays are not OCR'd (too error-prone).
+    Also accepts a single employee folder (images placed directly inside).
     """
     items: list[tuple[str, Path]] = []
     for child in sorted(images_root.iterdir()):
@@ -748,9 +747,16 @@ def _iter_employee_images(images_root: Path) -> list[tuple[str, Path]]:
             continue
         employee = child.name.strip()
         for file in sorted(child.rglob("*")):
-            if file.is_file() and file.suffix.lower() in IMAGE_SUFFIXES:
+            if _is_image_file(file):
                 items.append((employee, file))
-    return items
+    if items:
+        return items
+    # User selected Images/<Tên NV>/ instead of Images/
+    direct = [file for file in sorted(images_root.iterdir()) if _is_image_file(file)]
+    if direct:
+        employee = images_root.name.strip() or "NV"
+        return [(employee, file) for file in direct]
+    return []
 
 
 def _apply_ocr_result(
@@ -901,7 +907,12 @@ def load_photo_attendance(
     _log(log, "Ảnh Timemark: tên nhân viên = tên thư mục con (không OCR tên trên ảnh).")
     files = _iter_employee_images(root)
     if not files:
-        _log(log, "Thư mục ảnh không có subfolder nhân viên hoặc không có file ảnh.")
+        _log(
+            log,
+            f"Không thấy file ảnh trong {root}. "
+            "Chọn thư mục Images (mỗi nhân viên một thư mục con), "
+            "hoặc chọn thẳng thư mục của một nhân viên có file .jpg/.png.",
+        )
         empty = pd.DataFrame(columns=["employee_name", "date", "photo_in", "photo_out"])
         return empty, pd.DataFrame()
 
@@ -937,14 +948,16 @@ def load_photo_attendance(
 
     if fresh_jobs:
         try:
-            if len(fresh_jobs) == 1 or _frozen_onefile():
-                if _frozen_onefile() and len(fresh_jobs) > 1:
-                    _log(log, "OCR tuần tự trong bản .exe onefile (tránh lỗi torchvision::nms).")
-                done = _ocr_uncached_sequential(
+            if _use_process_pool(len(fresh_jobs)):
+                done = _ocr_uncached_parallel(
                     fresh_jobs, cache, cache_path, punches, ocr_rows, done, total, log, progress
                 )
             else:
-                done = _ocr_uncached_parallel(
+                if getattr(sys, "frozen", False):
+                    _log(log, "OCR tuần tự trong bản .exe (tránh lỗi process + torchvision::nms).")
+                elif threading.current_thread() is not threading.main_thread():
+                    _log(log, "OCR tuần tự trên luồng nền (Windows không chạy ProcessPool từ GUI).")
+                done = _ocr_uncached_sequential(
                     fresh_jobs, cache, cache_path, punches, ocr_rows, done, total, log, progress
                 )
         except Exception as exc:  # noqa: BLE001
