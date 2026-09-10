@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.1"
 GITHUB_OWNER = "namphuongvietlien-ux"
 GITHUB_REPO = "logic_chamcong"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
