@@ -1,5 +1,9 @@
 # Build and Test Instructions
 
+## ⚠️ Important: Windows Desktop Application
+
+**This is a Windows desktop application.** Build and testing must be done on a Windows machine with Python 3.10-3.14 installed. This cloud development environment (Linux) is used for code editing only.
+
 ## Overview
 
 AttendanceApp v1.0.5 now uses **RapidOCR with ONNX Runtime** for the frozen (PyInstaller) build to avoid the torch/EasyOCR crashes that occurred with PyInstaller + Python 3.14.
@@ -14,7 +18,14 @@ AttendanceApp v1.0.5 now uses **RapidOCR with ONNX Runtime** for the frozen (PyI
 
 ## Prerequisites
 
-### For Development
+### System Requirements
+
+- **Operating System**: Windows 10/11 (64-bit)
+- **Python**: 3.10, 3.11, 3.12, or 3.14 (3.11/3.12 recommended)
+- **RAM**: Minimum 4GB (8GB+ recommended for building)
+- **Disk**: ~2GB free space for dependencies + build artifacts
+
+### For Development (Windows)
 
 ```bash
 # Python 3.10-3.14 (recommended: 3.11 or 3.12)
@@ -23,6 +34,8 @@ py -m pip install --upgrade pip
 # Install all dependencies
 py -m pip install -r requirements.txt
 ```
+
+**Note**: On Linux/macOS, use `python3` instead of `py`. However, the frozen executable can only be built on Windows.
 
 ### For Building Frozen Executable
 
@@ -33,11 +46,24 @@ py -m pip install pyinstaller>=6.22.2
 
 ## Development Mode (Non-Frozen)
 
+### On Windows
+
 Run the app directly with Python:
 
 ```bash
 py app.py
 ```
+
+### Code Verification (Linux/macOS)
+
+If you're developing on Linux/macOS (e.g., in a cloud dev environment), you can verify syntax:
+
+```bash
+python3 -m py_compile app.py
+python3 -m py_compile processing/ocr_processor.py
+```
+
+However, **you cannot run the GUI or build the frozen exe** on non-Windows platforms. The app uses Windows-specific features (CustomTkinter, database paths, etc.).
 
 The app will use:
 - EasyOCR if available (requires torch, downloads models on first run)
