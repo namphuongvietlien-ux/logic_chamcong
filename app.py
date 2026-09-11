@@ -2,14 +2,40 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Must run before NumPy/Torch: duplicate OpenMP aborts the frozen exe (window just closes).
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+if getattr(sys, "frozen", False):
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
 import argparse
 import ctypes
+import faulthandler
 import queue
-import sys
 import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
+
+try:
+    _crash_path = (
+        Path(sys.executable).resolve().parent / "crash.log"
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent / "crash.log"
+    )
+    _crash_fh = open(_crash_path, "a", encoding="utf-8")
+    faulthandler.enable(file=_crash_fh, all_threads=True)
+    sys._chamcong_crash_log = _crash_fh  # noqa: SLF001
+except Exception:
+    pass
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -34,6 +60,28 @@ from leave_ui import LeavePanel
 from auto_updater import CURRENT_VERSION, prompt_update_check, schedule_update_check
 
 APP_TITLE = "Đối soát chấm công"
+
+
+def _install_crash_log() -> None:
+    """Attach Python exception hooks; faulthandler is enabled at import."""
+    handle = getattr(sys, "_chamcong_crash_log", None)
+    if handle is None:
+        return
+
+    def _hook(exc_type, exc, tb) -> None:
+        try:
+            handle.write("".join(traceback.format_exception(exc_type, exc, tb)))
+            handle.flush()
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+    def _thread_hook(args: threading.ExceptHookArgs) -> None:
+        _hook(args.exc_type, args.exc_value, args.exc_traceback)
+
+    threading.excepthook = _thread_hook
 
 
 def _app_dir() -> Path:
@@ -547,6 +595,7 @@ def main() -> int:
         return 0
     if args.cli:
         return run_cli(args)
+    _install_crash_log()
     _enable_dpi()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")

@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-CURRENT_VERSION = "1.0.1"
+CURRENT_VERSION = "1.0.2"
 GITHUB_OWNER = "namphuongvietlien-ux"
 GITHUB_REPO = "logic_chamcong"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -199,16 +199,17 @@ def _write_update_bat(*, app_dir: Path, mode: str, payload: Path | None, new_exe
         ]
     else:
         rel = os.path.relpath(payload or app_dir / STAGING_DIR, app_dir)
+        src_exe = f"{rel}\\{exe_q}"
+        src_int = f"{rel}\\_internal"
         lines += [
-            f'if exist "{exe_q}" del /f /q "{exe_q}"',
-            'if exist "_internal" rmdir /s /q "_internal"',
-            f'if exist "{rel}\\{exe_q}" move /y "{rel}\\{exe_q}" "{exe_q}"',
-            f'if exist "{rel}\\_internal" move /y "{rel}\\_internal" "_internal"',
+            f'if exist "{src_int}" robocopy "{src_int}" "_internal" /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS',
+            f'if exist "{src_exe}" copy /y "{src_exe}" "{exe_q}"',
+            'if not exist "_internal\\models\\craft_mlt_25k.pth" echo UPDATE_MISSING_OCR_MODELS> update_error.txt',
             f'if exist "{STAGING_DIR}" rmdir /s /q "{STAGING_DIR}"',
             f'if exist "{STAGING_ZIP}" del /f /q "{STAGING_ZIP}"',
         ]
     lines += [
-        f'start "" "{exe_q}"',
+        f'if exist "{exe_q}" start "" "{exe_q}"',
         'del "%~f0"',
     ]
     bat.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")

@@ -108,9 +108,10 @@ def _use_process_pool(job_count: int) -> bool:
 
 def _patch_torch_cpu() -> None:
     """EasyOCR on CPU: skip pin_memory, mute quantize warnings, cap threads so the GUI stays responsive."""
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     _ensure_torchvision_ops()
-    os.environ.setdefault("OMP_NUM_THREADS", "2")
-    os.environ.setdefault("MKL_NUM_THREADS", "2")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
     warnings.filterwarnings("ignore", message=".*pin_memory.*")
     warnings.filterwarnings("ignore", message=".*quantize_per_tensor.*")
     warnings.filterwarnings("ignore", message=".*Quantizer.cpp.*")
