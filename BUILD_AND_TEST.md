@@ -6,9 +6,19 @@
 
 ## Overview
 
-AttendanceApp v1.0.5 now uses **RapidOCR with ONNX Runtime** for the frozen (PyInstaller) build to avoid the torch/EasyOCR crashes that occurred with PyInstaller + Python 3.14.
+AttendanceApp v1.0.6 adds improved OCR for Timemark photos with white watermarks on bright backgrounds, plus Photo Code extraction for manual verification when OCR fails.
 
-### Key Changes in v1.0.5
+### Key Changes in v1.0.6
+
+1. **Three-pass OCR strategy**: Standard overlay → OpenCV enhancement → white-on-bright preprocessing (invert, CLAHE, adaptive threshold, Otsu)
+2. **Photo Code extraction**: Extracts ~14-char alphanumeric codes from right-edge vertical text for Timemark verification
+3. **Better white-on-bright handling**: Multiple preprocessing variants tested per ROI to handle white text on tiles, receipts, blue panels
+4. **Photo Code persistence**: Codes cached alongside timestamps, appear in OCR logs and exception reports
+5. **Official verification workflow**: Documentation for using https://verify.timemark.com when OCR fails
+
+For Timemark Photo Code verification details, see **TIMEMARK_VERIFY.md**.
+
+### Previous Version (v1.0.5)
 
 1. **Frozen builds (.exe)** use RapidOCR (ONNX Runtime) instead of EasyOCR/torch
 2. **Dev mode** can still use EasyOCR if available, or falls back to RapidOCR
@@ -131,12 +141,59 @@ mkdir "Images\Trần Thị B"
 # Images\Trần Thị B\photo2.jpg
 ```
 
+**Important**: Test with real Timemark photos that have:
+- White watermark text on bright backgrounds (tiles, white receipts, blue panels)
+- Visible Photo Code on the right edge (vertical text near "Timemark Verified")
+- Vietnamese date format (e.g., "07 Tháng 8, 2026")
+
 ### Test CLI Mode (Skip GUI)
 
 ```bash
 cd dist\AttendanceApp
 AttendanceApp.exe --cli --excel "path\to\fingerprint.xlsx" --images "Images" --out "output"
 ```
+
+### Expected OCR Behavior (v1.0.6)
+
+**Frozen build (.exe):**
+- Uses RapidOCR (ONNX Runtime)
+- Three-pass OCR: standard → OpenCV → white-on-bright
+- Log shows: "Khởi tạo RapidOCR (ONNX Runtime) cho bản frozen..."
+- Photo Code extraction attempts on all images
+- Log entries include Photo Code when found:
+  ```
+  [OK] Nguyễn Văn A/photo1.jpg: 2026-09-10 16:23:00 (Photo Code: XTRDEY34BPT12 (variant_0) | white-on-bright preprocess)
+  ```
+  Or for failures:
+  ```
+  [BỎ QUA] Trần Thị B/photo2.jpg: OCR có giờ 12:41, không thấy ngày — Cần verify Timemark với Photo Code: ABC123XYZ4567 [Photo Code: ABC123XYZ4567]
+  ```
+
+**Dev mode (py app.py):**
+- Uses EasyOCR if available, otherwise RapidOCR
+- Same three-pass strategy
+- Can use ProcessPool for parallel OCR (faster)
+
+### Verify Photo Code Extraction
+
+1. Check OCR log output for "Photo Code: XXXXX" entries
+2. Open a test image in an image viewer
+3. Zoom into the right edge near "Timemark Verified" text
+4. Compare the vertical alphanumeric code with the log
+5. If codes match → extraction successful
+6. If codes differ or missing → check image quality, compression, cropping
+
+### Test Verification Workflow
+
+When OCR fails but Photo Code is found:
+
+1. Copy the Photo Code from the log (e.g., `XTRDEY34BPT12`)
+2. Open https://verify.timemark.com in a browser
+3. Paste the code or upload the photo
+4. Verify that Timemark returns the correct timestamp
+5. Use the **Corrections** tab to manually add the verified punch
+
+See **TIMEMARK_VERIFY.md** for complete verification workflow documentation.
 
 ### Test GUI Mode
 
@@ -159,6 +216,8 @@ AttendanceApp.exe
 - Log should show: "Khởi tạo RapidOCR (ONNX Runtime) cho bản frozen..."
 - Sequential OCR processing (no ProcessPool in frozen mode)
 - Should handle Unicode paths correctly
+- Three-pass OCR strategy (v1.0.6+): standard → OpenCV → white-on-bright
+- Photo Code extraction on all images (v1.0.6+)
 
 **Dev mode (py app.py):**
 - Uses EasyOCR if available, otherwise RapidOCR
@@ -174,10 +233,21 @@ py -m pip install rapidocr-onnxruntime onnxruntime
 ```
 
 #### Issue: OCR text not detected from Timemark overlay
-**Solution:** Check that:
-- Images contain Timemark yellow overlay with "Điểm danh HH:MM"
+**Solution (v1.0.6+):** The new three-pass OCR strategy should handle most cases:
+- Pass 1: Standard yellow overlay detection
+- Pass 2: OpenCV contrast enhancement
+- Pass 3: White-on-bright preprocessing (invert, CLAHE, Otsu)
+
+If OCR still fails but Photo Code is extracted:
+- Use https://verify.timemark.com to verify the timestamp
+- See TIMEMARK_VERIFY.md for complete workflow
+- Manually add the verified punch via the Corrections tab
+
+Check that:
+- Images contain Timemark yellow overlay with "Điểm danh HH:MM" OR white bottom-left timestamp
+- Photo Code is visible on the right edge (vertical text)
 - Vietnamese date text visible (e.g., "07 Tháng 8, 2026")
-- Image quality is sufficient (not too blurry)
+- Image quality is sufficient (not too blurry or heavily compressed)
 
 #### Issue: Build fails with missing modules
 **Solution:**
@@ -240,23 +310,24 @@ The SQLite database (`hr_system.db` or `data/tas.db`) is stored **beside the exe
 
 ## Deployment
 
-To deploy v1.0.5:
+To deploy v1.0.6:
 
 1. Build the exe as described above
 2. Create a zip of the entire `dist/AttendanceApp/` folder
-3. Name it `AttendanceApp-v1.0.5.zip`
+3. Name it `AttendanceApp-v1.0.6.zip`
 4. Upload to GitHub Release as an asset
-5. Users can extract and run `AttendanceApp.exe`
+5. Include TIMEMARK_VERIFY.md in the release notes
+6. Users can extract and run `AttendanceApp.exe`
 
 The auto-updater will detect the new version and offer to update.
 
 ## Rollback to Previous Version
 
-If issues occur with RapidOCR:
+If issues occur with the new OCR strategy:
 
-1. Checkout the previous commit (before this fix)
-2. Rebuild with the old spec (torch/EasyOCR)
-3. Note: The old version has the frozen OCR crash issue
+1. Checkout the previous commit (v1.0.5)
+2. Rebuild with the old spec
+3. Note: The old version has simpler two-pass OCR and no Photo Code extraction
 
 ## Architecture Notes
 
@@ -288,6 +359,20 @@ _init_reader()
 
 ### Code Changes Summary
 
+**v1.0.6** (Timemark OCR + Photo Code):
+1. `processing/ocr_processor.py`:
+   - Added `preprocess_for_white_on_bright()`: multiple variants (invert, CLAHE, Otsu) for white text on bright backgrounds
+   - Added `extract_photo_code()`: OCR vertical right-edge strip, extract 12-16 alphanumeric code
+   - Updated `_ocr_image()`: three-pass strategy, return photo_code tuple
+   - Updated `_cache_payload()`, `_datetime_from_cache()`: persist/load photo codes
+   - Updated `ocr_image_job()`, `_apply_ocr_result()`: handle photo_code parameter
+   - Updated parallel/sequential workers: persist photo codes
+   - Enhanced `_overlay_rois()`: added bottom_half ROI for better coverage
+2. `processing/timemark_utils.py`: New utility module with Photo Code helpers (copy to clipboard, open verify URL, format notes)
+3. `TIMEMARK_VERIFY.md`: Complete documentation for Photo Code verification workflow
+4. `BUILD_AND_TEST.md`: Updated with v1.0.6 features, testing instructions for Photo Codes
+
+**v1.0.5** (RapidOCR):
 1. `requirements.txt`: Added `rapidocr-onnxruntime` and `onnxruntime`
 2. `processing/ocr_processor.py`:
    - Added `USE_RAPIDOCR` flag based on `sys.frozen`

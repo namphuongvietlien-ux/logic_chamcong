@@ -178,26 +178,34 @@ def _save_ocr_cache(path: Path, cache: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _datetime_from_cache(entry: Any) -> Optional[datetime]:
+def _datetime_from_cache(entry: Any) -> tuple[Optional[datetime], Optional[str]]:
+    """Returns (datetime, photo_code)."""
     if entry is None or not isinstance(entry, dict):
-        return None
+        return None, None
     day = entry.get("date")
     clock = entry.get("time")
+    photo_code = entry.get("photo_code")
     if not day or not clock:
-        return None
+        return None, photo_code
     blob = f"{day} {clock}"
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
         try:
-            return datetime.strptime(blob, fmt)
+            return datetime.strptime(blob, fmt), photo_code
         except ValueError:
             continue
-    return None
+    return None, photo_code
 
 
-def _cache_payload(dt: Optional[datetime]) -> Optional[dict[str, str]]:
-    if dt is None:
+def _cache_payload(dt: Optional[datetime], photo_code: Optional[str] = None) -> Optional[dict[str, str]]:
+    if dt is None and photo_code is None:
         return None
-    return {"date": dt.strftime("%Y-%m-%d"), "time": dt.strftime("%H:%M")}
+    payload = {}
+    if dt is not None:
+        payload["date"] = dt.strftime("%Y-%m-%d")
+        payload["time"] = dt.strftime("%H:%M")
+    if photo_code:
+        payload["photo_code"] = photo_code
+    return payload if payload else None
 
 
 def _ocr_worker_count() -> int:
@@ -227,7 +235,7 @@ def ocr_image_job(item: tuple[str, str, str]) -> dict[str, Any]:
     path = Path(path_str)
     try:
         reader = _ensure_process_reader()
-        dt, raw_text, note = _ocr_image(reader, path, log=None)
+        dt, raw_text, note, photo_code = _ocr_image(reader, path, log=None)
     except Exception as exc:  # noqa: BLE001
         return {
             "key": cache_key,
@@ -238,6 +246,7 @@ def ocr_image_job(item: tuple[str, str, str]) -> dict[str, Any]:
             "datetime": None,
             "note": f"OCR lỗi: {exc}",
             "raw_text": "",
+            "photo_code": None,
             "ok": False,
         }
     return {
@@ -249,6 +258,7 @@ def ocr_image_job(item: tuple[str, str, str]) -> dict[str, Any]:
         "datetime": dt,
         "note": note or "",
         "raw_text": (raw_text or "")[:500],
+        "photo_code": photo_code,
         "ok": dt is not None,
     }
 
@@ -357,6 +367,39 @@ def preprocess_roi(img):
         return None
 
 
+def preprocess_for_white_on_bright(img):
+    """Multiple strategies for white text on bright backgrounds (tiles, receipts, blue panels)."""
+    import cv2
+
+    variants = []
+    try:
+        if img is None or getattr(img, "size", 0) == 0:
+            return variants
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        height, width = gray.shape[:2]
+        scale = 3.0 if max(height, width) < 900 else 2.0
+        
+        resized = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        variants.append(resized)
+        
+        inverted = cv2.bitwise_not(resized)
+        variants.append(inverted)
+        
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        contrast = clahe.apply(resized)
+        variants.append(contrast)
+        
+        _, binary = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(binary)
+        
+        _, adaptive = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(adaptive)
+        
+        return variants
+    except Exception:
+        return []
+
+
 def _overlay_rois(bgr) -> list:
     """Crop Timemark overlay (yellow 'Điểm danh' + time + date), not the whole scene."""
     import cv2
@@ -392,10 +435,93 @@ def _overlay_rois(bgr) -> list:
     bottom_left = bgr[int(height * 0.58) :, : int(width * 0.88)]
     if bottom_left.size:
         rois.append(bottom_left)
+    bottom_half = bgr[int(height * 0.5) :, :]
+    if bottom_half.size:
+        rois.append(bottom_half)
     bottom = bgr[int(height * 0.75) :, :]
     if bottom.size:
         rois.append(bottom)
     return rois
+
+
+def extract_photo_code(bgr) -> tuple[Optional[str], str]:
+    """Extract Timemark Photo Code from vertical right-edge strip.
+    
+    Returns: (photo_code, note)
+    - photo_code: ~14 alphanumeric chars, or None if not found
+    - note: extraction method or error description
+    """
+    import cv2
+    import re
+    
+    if bgr is None or getattr(bgr, "size", 0) == 0:
+        return None, "No image"
+    
+    try:
+        height, width = bgr.shape[:2]
+        right_strip_width = int(width * 0.15)
+        right_strip = bgr[:, width - right_strip_width:]
+        
+        if right_strip.size == 0:
+            return None, "Empty right strip"
+        
+        gray = cv2.cvtColor(right_strip, cv2.COLOR_BGR2GRAY)
+        rotated = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        
+        scale = 3.0
+        scaled = cv2.resize(rotated, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        
+        variants = []
+        variants.append(scaled)
+        
+        inverted = cv2.bitwise_not(scaled)
+        variants.append(inverted)
+        
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        contrast = clahe.apply(scaled)
+        variants.append(contrast)
+        
+        _, binary = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(binary)
+        
+        code_pattern = re.compile(r'\b([A-Z0-9]{12,16})\b', re.IGNORECASE)
+        
+        reader = _ensure_process_reader()
+        
+        best_code = None
+        best_note = "Not found"
+        
+        for idx, variant in enumerate(variants):
+            try:
+                texts = _readtext(reader, variant)
+                combined = " ".join(texts).upper()
+                
+                combined = re.sub(r'[©®™]', '', combined)
+                combined = re.sub(r'TIMEMARK\s*VERIFIED', '', combined, flags=re.IGNORECASE)
+                combined = re.sub(r'100%\s*CHÂN\s*THỰC', '', combined, flags=re.IGNORECASE)
+                combined = re.sub(r'\s+', '', combined)
+                
+                matches = code_pattern.findall(combined)
+                if matches:
+                    for match in matches:
+                        cleaned = re.sub(r'[^A-Z0-9]', '', match.upper())
+                        if 12 <= len(cleaned) <= 16:
+                            best_code = cleaned
+                            best_note = f"variant_{idx}"
+                            return best_code, best_note
+                
+                alphanumeric = re.sub(r'[^A-Z0-9]', '', combined)
+                if 12 <= len(alphanumeric) <= 20:
+                    best_code = alphanumeric[:16]
+                    best_note = f"variant_{idx}_partial"
+                    
+            except Exception:
+                continue
+        
+        return best_code, best_note if best_code else "Not found"
+        
+    except Exception as exc:
+        return None, f"Error: {exc}"
 
 
 def _readtext(reader, source) -> list[str]:
@@ -704,20 +830,26 @@ def _collect_texts(reader, sources: list) -> list[str]:
     return texts
 
 
-def _ocr_image(reader, path: Path, log: LogFn = None) -> tuple[Optional[datetime], str, str]:
-    """Two-pass OCR: overlay crop first, then OpenCV-enhanced crop if date/time missing."""
+def _ocr_image(reader, path: Path, log: LogFn = None) -> tuple[Optional[datetime], str, str, Optional[str]]:
+    """Three-pass OCR: overlay crop, white-on-bright preprocessing, then extract photo code.
+    
+    Returns: (datetime, raw_text, note, photo_code)
+    """
     try:
         original = _load_cv_image(path)
     except Exception as exc:  # noqa: BLE001 — skip unreadable / corrupted files
-        return None, "", f"Không mở được ảnh: {exc}"
+        return None, "", f"Không mở được ảnh: {exc}", None
     if original is None:
-        return None, "", "OpenCV không đọc được ảnh"
+        return None, "", "OpenCV không đọc được ảnh", None
+
+    photo_code, code_note = extract_photo_code(original)
 
     rois = _overlay_rois(original) or [original]
     texts = _collect_texts(reader, rois)
     blob = " ".join(texts)
     parsed_date, parsed_time, note_parse = _parse_blob(blob)
     pass2_ok = False
+    pass3_ok = False
     overlay_ok = _timemark_complete(blob) or bool(extract_datetimes(blob))
     pass1_complete = parsed_date is not None and parsed_time is not None and overlay_ok
 
@@ -755,29 +887,90 @@ def _ocr_image(reader, path: Path, log: LogFn = None) -> tuple[Optional[datetime
             _log(log, f"OCR Pass 2 (OpenCV) lỗi, bỏ qua: {exc}")
 
     if parsed_date is None or parsed_time is None:
+        try:
+            all_variants = []
+            for roi in rois:
+                all_variants.extend(preprocess_for_white_on_bright(roi))
+            
+            texts3 = _collect_texts(reader, all_variants)
+            blob3 = " ".join(texts3)
+            if blob3:
+                blob = f"{blob} {blob3}".strip()
+            
+            d3, t3, note3 = _parse_blob(blob3)
+            if note3 and not note_parse:
+                note_parse = note3
+            tm_d3 = extract_timemark_date(blob3)
+            tm_t3 = extract_timemark_time(blob3)
+            
+            if tm_d3 is not None:
+                parsed_date = tm_d3
+                pass3_ok = True
+            elif d3 is not None:
+                parsed_date = d3
+                pass3_ok = True
+            
+            if tm_t3 is not None:
+                parsed_time = tm_t3
+                pass3_ok = True
+            elif t3 is not None:
+                parsed_time = t3
+                pass3_ok = True
+            
+            if pass3_ok and parsed_date is not None and parsed_time is not None:
+                msg = "[OCR] Đọc thành công với white-on-bright preprocessing."
+                print(msg)
+                _log(log, msg)
+                note_parse = "white-on-bright preprocess"
+        except Exception as exc:  # noqa: BLE001
+            _log(log, f"OCR Pass 3 (white-on-bright) lỗi, bỏ qua: {exc}")
+
+    if parsed_date is None or parsed_time is None:
         _warn_missing_ocr_parts(blob, parsed_date, parsed_time, log=log, source=path.name)
+    
     dt = combine_date_time(parsed_date, parsed_time)
+    
+    final_note = note_parse or ""
+    if pass2_ok:
+        final_note = "OpenCV preprocess" + (f" + {final_note}" if final_note else "")
+    elif pass3_ok:
+        final_note = "white-on-bright preprocess" + (f" + {final_note}" if final_note else "")
+    
+    if photo_code:
+        final_note = f"Photo Code: {photo_code}" + (f" ({code_note})" if code_note else "") + (f" | {final_note}" if final_note else "")
+    
     if dt:
-        return dt, blob, note_parse or ("OpenCV preprocess" if pass2_ok else "")
+        return dt, blob, final_note, photo_code
+    
     exif_dt = _exif_datetime(path)
     if parsed_time and exif_dt:
         combined = datetime(
             exif_dt.year, exif_dt.month, exif_dt.day,
             parsed_time.hour, parsed_time.minute, parsed_time.second,
         )
-        return combined, blob, "Date from EXIF, time from OCR"
+        return combined, blob, f"Date from EXIF, time from OCR | {final_note}", photo_code
     if parsed_date and not parsed_time:
-        return None, blob, f"OCR có ngày {parsed_date.isoformat()}, không thấy giờ"
+        msg = f"OCR có ngày {parsed_date.isoformat()}, không thấy giờ"
+        if photo_code:
+            msg += f" — Cần verify Timemark với Photo Code: {photo_code}"
+        return None, blob, msg, photo_code
     if parsed_time and not parsed_date:
         if exif_dt:
             return datetime(
                 exif_dt.year, exif_dt.month, exif_dt.day,
                 parsed_time.hour, parsed_time.minute, parsed_time.second,
-            ), blob, "Date from EXIF"
-        return None, blob, f"OCR có giờ {parsed_time.strftime('%H:%M')}, không thấy ngày"
+            ), blob, f"Date from EXIF | {final_note}", photo_code
+        msg = f"OCR có giờ {parsed_time.strftime('%H:%M')}, không thấy ngày"
+        if photo_code:
+            msg += f" — Cần verify Timemark với Photo Code: {photo_code}"
+        return None, blob, msg, photo_code
     if exif_dt:
-        return exif_dt, blob, "Used EXIF fallback"
-    return None, blob, note_parse or "Không đọc được timestamp"
+        return exif_dt, blob, f"Used EXIF fallback | {final_note}", photo_code
+    
+    fail_msg = note_parse or "Không đọc được timestamp"
+    if photo_code:
+        fail_msg += f" — Cần verify Timemark với Photo Code: {photo_code}"
+    return None, blob, fail_msg, photo_code
 
 
 def _is_image_file(path: Path) -> bool:
@@ -818,11 +1011,15 @@ def _apply_ocr_result(
     ocr_rows: list[dict],
     log: LogFn,
     from_cache: bool = False,
+    photo_code: Optional[str] = None,
 ) -> None:
     status = "ok" if dt else "skipped"
     if dt is None:
         if not from_cache:
-            _log(log, f"[BỎ QUA] {employee}/{path.name}: {note or 'OCR thất bại'}")
+            log_msg = f"[BỎ QUA] {employee}/{path.name}: {note or 'OCR thất bại'}"
+            if photo_code:
+                log_msg += f" [Photo Code: {photo_code}]"
+            _log(log, log_msg)
     else:
         punches.append(
             {
@@ -830,6 +1027,7 @@ def _apply_ocr_result(
                 "date": dt.date(),
                 "photo_time": dt.time(),
                 "photo_datetime": dt,
+                "photo_code": photo_code,
             }
         )
         if note and not from_cache:
@@ -842,6 +1040,7 @@ def _apply_ocr_result(
             "timestamp": dt,
             "ocr_text": raw_text,
             "note": note,
+            "photo_code": photo_code or "",
         }
     )
 
@@ -875,16 +1074,19 @@ def _ocr_uncached_parallel(
                     "datetime": None,
                     "note": f"OCR lỗi process: {exc}",
                     "raw_text": "",
+                    "photo_code": None,
                     "ok": False,
                 }
             dt = result.get("datetime")
             if not isinstance(dt, datetime):
-                dt = _datetime_from_cache(
+                dt_tuple = _datetime_from_cache(
                     {"date": result.get("date"), "time": result.get("time")}
                     if result.get("date") and result.get("time")
                     else None
                 )
-            payload = _cache_payload(dt)
+                dt = dt_tuple[0] if dt_tuple else None
+            photo_code = result.get("photo_code")
+            payload = _cache_payload(dt, photo_code)
             if payload is not None:
                 cache[key] = payload
             else:
@@ -898,6 +1100,7 @@ def _ocr_uncached_parallel(
                 punches,
                 ocr_rows,
                 log,
+                photo_code=photo_code,
             )
             processed += 1
             done += 1
@@ -924,13 +1127,13 @@ def _ocr_uncached_sequential(
     processed = 0
     for employee, path_str, key in jobs:
         path = Path(path_str)
-        dt, raw_text, note = _ocr_image(reader, path, log=log)
-        payload = _cache_payload(dt)
+        dt, raw_text, note, photo_code = _ocr_image(reader, path, log=log)
+        payload = _cache_payload(dt, photo_code)
         if payload is not None:
             cache[key] = payload
         else:
             cache.pop(key, None)
-        _apply_ocr_result(employee, path, dt, raw_text, note, punches, ocr_rows, log)
+        _apply_ocr_result(employee, path, dt, raw_text, note, punches, ocr_rows, log, photo_code=photo_code)
         processed += 1
         done += 1
         if progress:
@@ -988,9 +1191,9 @@ def load_photo_attendance(
 
     done = 0
     for employee, path, key, entry in cached_jobs:
-        dt = _datetime_from_cache(entry)
+        dt, photo_code = _datetime_from_cache(entry)
         note = "cache" if dt else "cache (không có giờ)"
-        _apply_ocr_result(employee, path, dt, "", note, punches, ocr_rows, log, from_cache=True)
+        _apply_ocr_result(employee, path, dt, "", note, punches, ocr_rows, log, from_cache=True, photo_code=photo_code)
         done += 1
     if cached_jobs and progress:
         progress(done, total, f"cache {done}/{total}")
