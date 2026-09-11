@@ -258,13 +258,13 @@ def _init_reader(log: LogFn = None):
     if USE_RAPIDOCR:
         _log(log, "Khởi tạo RapidOCR (ONNX Runtime) cho bản frozen...")
         try:
-            from rapidocr_onnxruntime import RapidOCR
-            reader = RapidOCR(det_use_cuda=False, rec_use_cuda=False)
+            from rapidocr import RapidOCR
+            reader = RapidOCR()
             _log(log, "RapidOCR sẵn sàng (ONNX, không dùng torch).")
             return reader
         except ImportError as exc:
             raise RuntimeError(
-                "Thiếu RapidOCR. Cài: pip install rapidocr-onnxruntime onnxruntime"
+                "Thiếu RapidOCR. Cài: py -m pip install rapidocr onnxruntime"
             ) from exc
     
     _patch_torch_cpu()
@@ -293,8 +293,8 @@ def _init_reader(log: LogFn = None):
     except ImportError:
         _log(log, "EasyOCR không có, thử RapidOCR...")
         try:
-            from rapidocr_onnxruntime import RapidOCR
-            reader = RapidOCR(det_use_cuda=False, rec_use_cuda=False)
+            from rapidocr import RapidOCR
+            reader = RapidOCR()
             _log(log, "RapidOCR sẵn sàng (fallback từ EasyOCR).")
             return reader
         except ImportError as exc:
@@ -410,14 +410,20 @@ def _readtext(reader, source) -> list[str]:
     
     if hasattr(reader, '__class__') and 'RapidOCR' in reader.__class__.__name__:
         result = reader(image, use_det=True, use_cls=True, use_rec=True)
-        if result is None or not result:
+        if result is None:
             return []
+        txts = getattr(result, 'txts', None)
+        if txts:
+            return [str(x) for x in txts if x]
         texts = []
-        for line in result:
-            if isinstance(line, (list, tuple)) and len(line) >= 2:
-                text = str(line[1]) if len(line) >= 2 else ""
-                if text:
-                    texts.append(text)
+        try:
+            for line in result:
+                if isinstance(line, (list, tuple)) and len(line) >= 2:
+                    text = str(line[1])
+                    if text:
+                        texts.append(text)
+        except TypeError:
+            return []
         return texts
     else:
         result = reader.readtext(image, detail=0, paragraph=True)

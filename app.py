@@ -16,6 +16,28 @@ if getattr(sys, "frozen", False):
 
     multiprocessing.freeze_support()
 
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+def _safe_print(message: str) -> None:
+    try:
+        print(message, flush=True)
+    except UnicodeEncodeError:
+        raw = (str(message) + "\n").encode("utf-8", errors="replace")
+        try:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.flush()
+        except Exception:
+            sys.__stdout__.write(str(message).encode("ascii", "replace").decode("ascii") + "\n")
+
+_configure_stdio()
+
 import argparse
 import ctypes
 import faulthandler
@@ -550,10 +572,10 @@ class AttendanceApp(ctk.CTk):
 
 def run_cli(args: argparse.Namespace) -> int:
     def log(message: str) -> None:
-        print(message)
+        _safe_print(message)
 
     def progress(current: int, total: int, label: str) -> None:
-        print(f"OCR {current}/{total}: {label}")
+        _safe_print(f"OCR {current}/{total}: {label}")
 
     result = run_pipeline(
         excel_path=args.excel,
@@ -566,8 +588,8 @@ def run_cli(args: argparse.Namespace) -> int:
         progress=progress,
         delete_images=args.delete_images,
     )
-    print("Daily:", result["paths"]["daily"])
-    print("Monthly:", result["paths"]["monthly"])
+    _safe_print("Daily: " + str(result["paths"]["daily"]))
+    _safe_print("Monthly: " + str(result["paths"]["monthly"]))
     return 0
 
 
@@ -589,7 +611,7 @@ def main() -> int:
         from processing.folders import create_employee_folders
 
         def log(message: str) -> None:
-            print(message)
+            _safe_print(message)
 
         create_employee_folders(args.master, args.images, log=log)
         return 0

@@ -1,4 +1,4 @@
-customtkinter==6.0.0
+﻿customtkinter==6.0.0
 pandas==3.0.5
 openpyxl==3.1.5
 opencv-python-headless==5.0.0.93
@@ -9,8 +9,5 @@ pyinstaller==6.22.2
 tkcalendar==1.6.1
 babel==2.18.0
 requests==2.32.5
-rapidocr-onnxruntime>=1.4.4
-onnxruntime>=1.7.0
-easyocr==1.7.2
-torch==2.14.0
-torchvision==0.29.0
+rapidocr>=3.0.0
+onnxruntime>=1.24.0

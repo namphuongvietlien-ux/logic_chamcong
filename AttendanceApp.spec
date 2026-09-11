@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec: onedir build for CustomTkinter + EasyOCR (Windows)."""
 
 import os
@@ -12,7 +12,7 @@ hiddenimports = [
     "PIL._tkinter_finder",
     "tkinter",
     "customtkinter",
-    "rapidocr_onnxruntime",
+    "rapidocr",
     "onnxruntime",
     "cv2",
     "skimage",
@@ -64,7 +64,7 @@ hiddenimports = [
     "processing.history_import",
 ]
 
-for pkg in ("customtkinter", "rapidocr_onnxruntime", "onnxruntime", "cv2"):
+for pkg in ("customtkinter", "rapidocr", "onnxruntime", "cv2"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
         datas += pkg_datas
