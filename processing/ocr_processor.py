@@ -1,4 +1,8 @@
-"""Module 2: OCR timestamped photos in employee subfolders."""
+"""Module 2: OCR timestamped photos in employee subfolders.
+
+Uses RapidOCR (ONNX Runtime) for frozen builds to avoid torch/EasyOCR PyInstaller crashes.
+Dev mode can still use EasyOCR if available, or falls back to RapidOCR.
+"""
 
 from __future__ import annotations
 
@@ -64,7 +68,8 @@ def _log(callback: LogFn, message: str) -> None:
         callback(message)
 
 
-REQUIRED_OCR_MODELS = ("craft_mlt_25k.pth", "latin_g2.pth")
+REQUIRED_EASYOCR_MODELS = ("craft_mlt_25k.pth", "latin_g2.pth")
+USE_RAPIDOCR = getattr(sys, "frozen", False)
 
 
 def _model_dir() -> Path:
@@ -73,7 +78,9 @@ def _model_dir() -> Path:
 
 
 def _models_ready(model_dir: Path) -> bool:
-    return all((model_dir / name).is_file() for name in REQUIRED_OCR_MODELS)
+    if USE_RAPIDOCR:
+        return True
+    return all((model_dir / name).is_file() for name in REQUIRED_EASYOCR_MODELS)
 
 
 def _ensure_torchvision_ops() -> None:
@@ -198,18 +205,18 @@ def _ocr_worker_count() -> int:
 
 
 def _ensure_process_reader():
-    """One EasyOCR Reader per process — Reader is not pickle-safe."""
+    """One OCR Reader per process — Reader is not pickle-safe."""
     global _PROCESS_READER
     if _PROCESS_READER is None:
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["MKL_NUM_THREADS"] = "1"
-        _ensure_torchvision_ops()
-        try:
-            import torch
-
-            torch.set_num_threads(1)
-        except Exception:
-            pass
+        if not USE_RAPIDOCR:
+            _ensure_torchvision_ops()
+            try:
+                import torch
+                torch.set_num_threads(1)
+            except Exception:
+                pass
         _PROCESS_READER = _init_reader(log=None)
     return _PROCESS_READER
 
@@ -247,32 +254,53 @@ def ocr_image_job(item: tuple[str, str, str]) -> dict[str, Any]:
 
 
 def _init_reader(log: LogFn = None):
+    """Initialize OCR reader: RapidOCR for frozen, EasyOCR for dev (with fallback)."""
+    if USE_RAPIDOCR:
+        _log(log, "Khởi tạo RapidOCR (ONNX Runtime) cho bản frozen...")
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            reader = RapidOCR(det_use_cuda=False, rec_use_cuda=False)
+            _log(log, "RapidOCR sẵn sàng (ONNX, không dùng torch).")
+            return reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Thiếu RapidOCR. Cài: pip install rapidocr-onnxruntime onnxruntime"
+            ) from exc
+    
     _patch_torch_cpu()
     model_storage = _model_dir()
     offline = _models_ready(model_storage)
-    if offline:
-        _log(log, f"Nạp mô hình OCR offline từ {model_storage}")
-    elif getattr(sys, "frozen", False):
-        raise FileNotFoundError(
-            "Thiếu mô hình EasyOCR (craft_mlt_25k.pth, latin_g2.pth). "
-            "Đặt chúng vào thư mục models rồi đóng gói lại bằng AttendanceApp.spec."
-        )
-    else:
-        _log(log, f"Tải mô hình OCR vào {model_storage} (chỉ lần đầu, cần mạng)...")
-        model_storage.mkdir(parents=True, exist_ok=True)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        import easyocr
-
-        reader = easyocr.Reader(
-            ["vi", "en"],
-            gpu=False,
-            verbose=False,
-            model_storage_directory=str(model_storage),
-            download_enabled=not offline,
-        )
-    _log(log, "Mô hình OCR sẵn sàng.")
-    return reader
+    
+    try:
+        if offline:
+            _log(log, f"Nạp mô hình EasyOCR offline từ {model_storage}")
+        else:
+            _log(log, f"Tải mô hình EasyOCR vào {model_storage} (chỉ lần đầu, cần mạng)...")
+            model_storage.mkdir(parents=True, exist_ok=True)
+        
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            import easyocr
+            reader = easyocr.Reader(
+                ["vi", "en"],
+                gpu=False,
+                verbose=False,
+                model_storage_directory=str(model_storage),
+                download_enabled=not offline,
+            )
+        _log(log, "Mô hình EasyOCR sẵn sàng.")
+        return reader
+    except ImportError:
+        _log(log, "EasyOCR không có, thử RapidOCR...")
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            reader = RapidOCR(det_use_cuda=False, rec_use_cuda=False)
+            _log(log, "RapidOCR sẵn sàng (fallback từ EasyOCR).")
+            return reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Không có EasyOCR hoặc RapidOCR. Cài một trong hai."
+            ) from exc
 
 
 def _load_cv_image(path: Path):
@@ -371,6 +399,7 @@ def _overlay_rois(bgr) -> list:
 
 
 def _readtext(reader, source) -> list[str]:
+    """Read text from image using either RapidOCR or EasyOCR."""
     import cv2
 
     if source is None or getattr(source, "size", 0) == 0:
@@ -378,8 +407,21 @@ def _readtext(reader, source) -> list[str]:
     image = np.ascontiguousarray(source)
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    result = reader.readtext(image, detail=0, paragraph=True)
-    return [str(t) for t in result if t]
+    
+    if hasattr(reader, '__class__') and 'RapidOCR' in reader.__class__.__name__:
+        result = reader(image, use_det=True, use_cls=True, use_rec=True)
+        if result is None or not result:
+            return []
+        texts = []
+        for line in result:
+            if isinstance(line, (list, tuple)) and len(line) >= 2:
+                text = str(line[1]) if len(line) >= 2 else ""
+                if text:
+                    texts.append(text)
+        return texts
+    else:
+        result = reader.readtext(image, detail=0, paragraph=True)
+        return [str(t) for t in result if t]
 
 
 def _resize_max(image, max_width: int = 1600):

@@ -12,18 +12,12 @@ hiddenimports = [
     "PIL._tkinter_finder",
     "tkinter",
     "customtkinter",
-    "easyocr",
+    "rapidocr_onnxruntime",
+    "onnxruntime",
     "cv2",
     "skimage",
     "scipy",
-    "nltk",
     "multiprocessing",
-    "torchvision",
-    "torchvision.ops",
-    "torchvision.ops.boxes",
-    "torchvision.ops.nms",
-    "torchvision.extension",
-    "torchvision._meta_registrations",
     "correction_ui",
     "employee_ui",
     "holiday_ui",
@@ -70,7 +64,7 @@ hiddenimports = [
     "processing.history_import",
 ]
 
-for pkg in ("customtkinter", "easyocr", "torch", "torchvision", "cv2"):
+for pkg in ("customtkinter", "rapidocr_onnxruntime", "onnxruntime", "cv2"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
         datas += pkg_datas
@@ -90,11 +84,7 @@ except Exception:
     pass
 
 _spec_dir = Path(SPECPATH) if "SPECPATH" in dir() else Path(".")
-_runtime_hook = _spec_dir / "packaging" / "pyi_rth_torchvision_ops.py"
-_models_dir = _spec_dir / "models"
-if not _models_dir.is_dir() or not any(_models_dir.glob("*.pth")):
-    raise SystemExit("Missing EasyOCR models in models/. Run: py download_ocr_models.py")
-datas.append((str(_models_dir.resolve()), "models"))
+_runtime_hook = _spec_dir / "packaging" / "pyi_rth_rapidocr.py"
 # Never pack SQLite into datas — HR data lives next to the .exe (hr_system.db / data/tas.db),
 # not inside _MEIPASS. Bundling a .db would overwrite live records on each deploy.
 # Required layouts: packed into _MEIPASS so end users never copy them.
