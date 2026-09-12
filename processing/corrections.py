@@ -110,7 +110,8 @@ def milestone_from_clocks(
     in1, out1, in2, out2 = _as_time(in1), _as_time(out1), _as_time(in2), _as_time(out2)
     target = shift_target_hours(standard_shift_hours)
     hours, _deducted = hours_from_clocks(
-        in1, out1, in2, out2, lunch_duration_hours, logical_date=work_date, overnight=bool(overnight)
+        in1, out1, in2, out2, lunch_duration_hours, logical_date=work_date, overnight=bool(overnight),
+        standard_shift_hours=float(standard_shift_hours or 8.0)
     )
     cong = workday_count(hours, target)
     actual = float(hours or 0)

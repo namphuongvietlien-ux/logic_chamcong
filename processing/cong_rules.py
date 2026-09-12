@@ -266,11 +266,15 @@ def hours_from_clocks(
     logical_date: Optional[date] = None,
     unset_lunch_hours: float = 0.0,
     overnight: bool = False,
+    standard_shift_hours: float = 8.0,
 ) -> tuple[float, float]:
     """Net hours from clocks on one calendar day.
 
     Missing OUT (no overnight flag) → that pair contributes 0; never pull the next day.
     Overnight=True → last OUT is Day N+1, duration = that datetime − Day N IN.
+    
+    For 8h shifts: If enough hours worked, counts as full day even without lunch break.
+    For 12h shifts: Must have lunch break, otherwise flagged for review.
     """
     from processing.sessions import clocks_to_datetimes, hours_from_datetimes
 
@@ -279,7 +283,7 @@ def hours_from_clocks(
         return 0.0, 0.0
     if overnight:
         stamps = clocks_to_datetimes(logical_date, in1, out1, in2, out2, overnight=True)
-        return hours_from_datetimes(stamps, 0.0, unset_lunch_hours=0.0)
+        return hours_from_datetimes(stamps, 0.0, unset_lunch_hours=0.0, standard_shift_hours=standard_shift_hours)
     if in1 is not None and out1 is None and out2 is None:
         return 0.0, 0.0
     last_out = last_out_time(in1, out1, in2, out2)
@@ -287,7 +291,7 @@ def hours_from_clocks(
     if first_in and last_out and last_out < first_in:
         return 0.0, 0.0
     stamps = clocks_to_datetimes(logical_date, in1, out1, in2, out2, overnight=False)
-    return hours_from_datetimes(stamps, lunch_duration_hours, unset_lunch_hours=unset_lunch_hours)
+    return hours_from_datetimes(stamps, lunch_duration_hours, unset_lunch_hours=unset_lunch_hours, standard_shift_hours=standard_shift_hours)
 
 
 def deducted_lunch_hours(
@@ -375,10 +379,12 @@ def net_hours(
     lunch_duration_hours: Optional[float] = None,
     logical_date: Optional[date] = None,
     overnight: bool = False,
+    standard_shift_hours: float = 8.0,
 ) -> float:
     """Net hours from punches. Missing IN/OUT pair → 0. Overnight OUT is Day N+1 only if flagged."""
     hours, _ = hours_from_clocks(
-        d, e, f, g, lunch_duration_hours, logical_date=logical_date, overnight=overnight
+        d, e, f, g, lunch_duration_hours, logical_date=logical_date, overnight=overnight,
+        standard_shift_hours=standard_shift_hours
     )
     return hours
 
