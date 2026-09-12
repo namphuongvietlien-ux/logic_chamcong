@@ -226,6 +226,16 @@ class CorrectionPanel(ctk.CTkFrame):
             command=self._on_filter_change,
         )
         self.filter_combo.pack(side="left", padx=(8, 16))
+        ctk.CTkLabel(tools2, text="Ca").pack(side="left")
+        self.shift_filter_var = ctk.StringVar(value="Tất cả ca")
+        self.shift_combo = ctk.CTkComboBox(
+            tools2,
+            variable=self.shift_filter_var,
+            values=["Tất cả ca", "Ca 8 tiếng", "Ca 12 tiếng"],
+            width=140,
+            command=self._on_filter_change,
+        )
+        self.shift_combo.pack(side="left", padx=(8, 16))
         ctk.CTkButton(tools2, text="Thêm người", width=120, command=self._add_person).pack(side="left")
         ctk.CTkButton(
             tools2,
@@ -352,15 +362,18 @@ class CorrectionPanel(ctk.CTkFrame):
         self.tree.tag_configure("ok", foreground="#276749")
         self.tree.tag_configure("short", foreground="#C53030")
         self.tree.tag_configure("issue", foreground="#9B2C2C")
+        self.tree.tag_configure("needs_lunch", background="#FFF9C4")  # Yellow highlight for 12h shifts needing lunch 補充
 
     def _status_tag(self, issue, reached: bool) -> str:
         if issue:
             return "issue"
         return "ok" if reached else "short"
 
-    def _row_tags(self, index: int, status: str, hover: bool = False) -> tuple:
+    def _row_tags(self, index: int, status: str, hover: bool = False, needs_lunch_補充: bool = False) -> tuple:
         stripe = "even" if index % 2 == 0 else "odd"
         tags = [stripe, status]
+        if needs_lunch_補充:
+            tags.append("needs_lunch")
         if hover:
             tags.append("hover")
         return tuple(tags)
@@ -713,6 +726,14 @@ class CorrectionPanel(ctk.CTkFrame):
                 all_rows = all_rows[all_rows["employee_name"].map(lambda v: name_match_key(v) == name_match_key(picked))]
         if all_rows.empty:
             return all_rows
+        
+        # Shift filter (NEW)
+        shift_filter = self.shift_filter_var.get() if hasattr(self, 'shift_filter_var') else "Tất cả ca"
+        if shift_filter == "Ca 8 tiếng":
+            all_rows = all_rows[all_rows["standard_shift_hours"].fillna(8.0).astype(float) <= 10.0]
+        elif shift_filter == "Ca 12 tiếng":
+            all_rows = all_rows[all_rows["standard_shift_hours"].fillna(8.0).astype(float) > 10.0]
+        
         mode = self.filter_var.get()
         if mode in {"Tất cả", "Tất cả ngày này"}:
             return all_rows
@@ -780,6 +801,22 @@ class CorrectionPanel(ctk.CTkFrame):
                 bool(rec.get("overnight")),
             )
             tag = self._status_tag(issue, info["reached"])
+            
+            # Check if 12h shift needs lunch 補充 (yellow highlighting)
+            needs_lunch_補充 = False
+            shift_hours = float(rec.get("standard_shift_hours") or 8.0)
+            lunch_hours = float(rec.get("lunch_duration_hours") or 0.0)
+            if shift_hours > 10.0:  # 12h shift
+                # Check if only 2 punches (no lunch break clocked)
+                has_in1 = rec.get("in1") is not None
+                has_out1 = rec.get("out1") is not None
+                has_in2 = rec.get("in2") is not None
+                has_out2 = rec.get("out2") is not None
+                punch_count = sum([has_in1, has_out1, has_in2, has_out2])
+                # If only 2 punches and didn't reach target, needs lunch 補充
+                if punch_count == 2 and not info["reached"] and lunch_hours > 0:
+                    needs_lunch_補充 = True
+            
             inserted = self.tree.insert(
                 "",
                 "end",
@@ -796,7 +833,7 @@ class CorrectionPanel(ctk.CTkFrame):
                     info["badge"],
                     info["cong_text"],
                 ),
-                tags=self._row_tags(row_index, tag),
+                tags=self._row_tags(row_index, tag, needs_lunch_補充=needs_lunch_補充),
             )
             row_index += 1
             if first is None:

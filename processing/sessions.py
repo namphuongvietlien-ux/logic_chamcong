@@ -240,11 +240,18 @@ def overlaps_daytime_lunch(
     return False
 
 
-def calculate_smart_work_hours(stamps: list[datetime], shift_lunch_hours: float) -> float:
+def calculate_smart_work_hours(stamps: list[datetime], shift_lunch_hours: float, standard_shift_hours: float = 8.0) -> float:
     """Pair-wise In/Out with anomaly guards. Returns -1.0 when HR must intervene.
 
     Even count (2, 4, 6…): sum each pair. Pair > 16h → cross-day trap (-1).
     Pair under 15 minutes → junk punch, skipped (not an exception).
+    
+    Lunch deduction logic (NEW):
+    - 8h shift (≤ 10h): If total hours ≥ standard_shift_hours → count as full day, no lunch deduction needed
+      Example: 8h shift, worked 8.5h without lunch break → still counts as 1.0 công (full day)
+    - 12h shift (> 10h): Must have lunch break hours, otherwise mark for review (-1.0)
+      Example: 12h shift, worked 12h straight without clocking out for lunch → -1.0 (needs lunch 补充)
+    
     Exactly 2 punches and total > 6h → deduct shift_lunch_hours (worked through break).
     Odd count or fewer than 2 punches → -1.0 (exception tab).
     """
@@ -256,6 +263,11 @@ def calculate_smart_work_hours(stamps: list[datetime], shift_lunch_hours: float)
         lunch = 0.0
     if lunch < 0:
         lunch = 0.0
+    
+    try:
+        standard_hours = float(standard_shift_hours or 8.0)
+    except (TypeError, ValueError):
+        standard_hours = 8.0
 
     if num_punches < 2:
         return ODD_PUNCH_HOURS
@@ -273,8 +285,24 @@ def calculate_smart_work_hours(stamps: list[datetime], shift_lunch_hours: float)
             continue
         total_hours += pair_hours
 
+    # Smart lunch deduction based on shift duration
     if num_punches == 2 and total_hours > LUNCH_IF_SPAN_HOURS:
-        total_hours -= lunch
+        # 8h shifts (≤ 10h): if worked enough hours, don't force lunch deduction
+        if standard_hours <= 10.0:
+            # If total hours already meet or exceed standard hours, count as full day
+            if total_hours >= standard_hours:
+                # Don't deduct lunch - enough hours worked
+                pass
+            else:
+                # Not enough hours, deduct lunch
+                total_hours -= lunch
+        else:
+            # 12h shifts (> 10h): MUST deduct lunch, otherwise return -1 for review
+            if lunch > 0:
+                total_hours -= lunch
+            else:
+                # 12h shift but no lunch configured → needs HR review
+                return ODD_PUNCH_HOURS
 
     return max(0.0, round(total_hours, 2))
 
@@ -285,11 +313,15 @@ def hours_from_datetimes(
     lunch_start: time = DAYTIME_LUNCH_START,
     lunch_end: time = DAYTIME_LUNCH_END,
     unset_lunch_hours: float = 0.0,
+    standard_shift_hours: float = 8.0,
 ) -> tuple[float, float]:
     """Net hours from In/Out pairs. Odd punch count → 0 hours (exception tab).
 
     Lunch is deducted only when master provides ``lunch_duration_hours`` (or the
     caller passes unset_lunch_hours). Never invent 1h / 12:00–13:00.
+    
+    For 8h shifts: If enough hours worked, counts as full day even without lunch break.
+    For 12h shifts: Must have lunch break, otherwise flagged for review.
     """
     del lunch_start, lunch_end
     stamps = merge_day_punches(stamps)
@@ -301,8 +333,13 @@ def hours_from_datetimes(
         amount = float(unset_lunch_hours or 0)
     if amount < 0:
         amount = 0.0
+    
+    try:
+        standard_hours = float(standard_shift_hours or 8.0)
+    except (TypeError, ValueError):
+        standard_hours = 8.0
 
-    raw = calculate_smart_work_hours(stamps, amount)
+    raw = calculate_smart_work_hours(stamps, amount, standard_hours)
     if raw < 0 or len(stamps) < 2:
         return 0.0, 0.0
 

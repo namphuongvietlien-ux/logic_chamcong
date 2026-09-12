@@ -230,6 +230,7 @@ def recompute_record(
             hour_stamps,
             0.0 if overnight_flag else lunch_h,
             unset_lunch_hours=0.0,
+            standard_shift_hours=std,
         )
     else:
         actual, deducted = hours_from_clocks(
@@ -241,6 +242,7 @@ def recompute_record(
             logical_date=logical,
             unset_lunch_hours=0.0,
             overnight=bool(overnight_flag),
+            standard_shift_hours=std,
         )
     data["deducted_lunch_hours"] = round(deducted, 2)
     data["actual_work_hours"] = round(actual, 2)
